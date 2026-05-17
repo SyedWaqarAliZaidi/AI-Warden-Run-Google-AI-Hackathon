@@ -160,7 +160,11 @@ export class GameEngine {
     this.resetPlayer(true);
     this.timeLimit = LEVEL_TIME_LIMITS[this.level] ?? 180;
     this.timeLeft = this.timeLimit;
-    this.exitGate = { x: this.worldW - 140, y: this.worldH / 2, r: 70, open: false };
+    const gateY =
+      this.level === 3 ? 1300 :
+      this.level === 1 ? this.worldH - 200 :
+      this.worldH / 2;
+    this.exitGate = { x: this.worldW - 140, y: gateY, r: 70, open: false };
     this.buildWalls();
     this.spawnEnemies(cfg);
     this.spawnHazards(cfg);
