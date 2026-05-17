@@ -405,17 +405,17 @@ export class GameEngine {
 
     if (this.shake > 0) this.shake = Math.max(0, this.shake - dt * 60);
 
-    if (this.player.hp <= 0 && this.state !== "dead") {
+    if (this.player.hp <= 0) {
       this.state = "dead";
       this.shake = 14;
       this.spawnExplosion(this.player.pos.x, this.player.pos.y, "#ff3b6b", 50);
       this.onEvent({ type: "death" });
+      return;
     }
-    if (this.enemies.length === 0 && this.state === "playing") {
+    if (this.enemies.length === 0) {
       this.state = "victory";
       this.victoryHold = 2.2;
       this.player.attackSwing = 0;
-      // celebratory burst
       this.spawnExplosion(this.player.pos.x, this.player.pos.y, "#00f0ff", 30);
     }
   }
