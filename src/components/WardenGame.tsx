@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useServerFn } from "@tanstack/react-start";
-import { GameEngine, ARENA_W, ARENA_H, type GameEvent } from "@/game/engine";
+import { GameEngine, VIEW_W, VIEW_H, type GameEvent } from "@/game/engine";
 import { render } from "@/game/render";
 import {
   requestWardenConfig,
@@ -26,6 +26,8 @@ export function WardenGame() {
   const [phase, setPhase] = useState<Phase>("menu");
   const [currentLevel, setCurrentLevel] = useState(1);
   const [hp, setHp] = useState(100);
+  const [countdown, setCountdown] = useState(0);
+  const [engineState, setEngineState] = useState<"countdown" | "playing" | "victory" | "dead">("countdown");
   const [trace, setTrace] = useState<TraceLine[]>([]);
   const [lastMetrics, setLastMetrics] = useState<PlayerMetrics | null>(null);
   const [config, setConfig] = useState<LevelConfig | null>(null);
@@ -66,7 +68,11 @@ export function WardenGame() {
       const g = engineRef.current;
       const ctx = canvasRef.current?.getContext("2d");
       if (g && ctx) {
-        if (phase === "playing") g.update(dt);
+        if (phase === "playing") {
+          g.update(dt);
+          setEngineState(g.state);
+          setCountdown(g.countdown);
+        }
         render(ctx, g);
         if (phase === "playing") setHp(Math.round(g.player.hp));
       }
@@ -101,8 +107,8 @@ export function WardenGame() {
     const canvas = canvasRef.current;
     if (!g || !canvas) return;
     const rect = canvas.getBoundingClientRect();
-    g.pointer.x = ((e.clientX - rect.left) / rect.width) * ARENA_W;
-    g.pointer.y = ((e.clientY - rect.top) / rect.height) * ARENA_H;
+    g.pointer.x = ((e.clientX - rect.left) / rect.width) * VIEW_W;
+    g.pointer.y = ((e.clientY - rect.top) / rect.height) * VIEW_H;
   };
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     handlePointer(e);
@@ -218,17 +224,17 @@ export function WardenGame() {
       <div className="flex flex-col lg:flex-row gap-4 p-4 max-w-[1400px] mx-auto">
         {/* Game canvas */}
         <div className="flex-1 relative">
-          <div className="relative w-full" style={{ maxWidth: ARENA_W }}>
+          <div className="relative w-full" style={{ maxWidth: VIEW_W }}>
             <canvas
               ref={canvasRef}
-              width={ARENA_W}
-              height={ARENA_H}
+              width={VIEW_W}
+              height={VIEW_H}
               onPointerMove={handlePointer}
               onPointerDown={handlePointerDown}
               onPointerUp={handlePointerUp}
               onPointerLeave={handlePointerUp}
               className="w-full h-auto border border-cyan-500/40 rounded-md touch-none"
-              style={{ imageRendering: "pixelated", boxShadow: "0 0 40px rgba(0,240,255,0.15)" }}
+              style={{ boxShadow: "0 0 40px rgba(0,240,255,0.15)" }}
             />
 
             {/* HP bar */}
@@ -248,6 +254,27 @@ export function WardenGame() {
             </div>
 
             {/* Overlays */}
+            {phase === "playing" && engineState === "countdown" && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                <div className="text-[10px] tracking-[0.4em] text-cyan-300/70 mb-2">SYSTEM SYNC</div>
+                <div
+                  className="text-7xl font-bold text-cyan-200 tabular-nums"
+                  style={{ textShadow: "0 0 24px #00f0ff" }}
+                >
+                  {Math.max(1, Math.ceil(countdown))}
+                </div>
+              </div>
+            )}
+            {phase === "playing" && engineState === "victory" && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                <div
+                  className="text-4xl font-bold tracking-[0.4em] text-cyan-200"
+                  style={{ textShadow: "0 0 24px #00f0ff" }}
+                >
+                  VICTORY
+                </div>
+              </div>
+            )}
             {phase === "menu" && (
               <Overlay>
                 <h2 className="text-3xl tracking-widest text-cyan-300 mb-3" style={{ textShadow: "0 0 16px #00f0ff" }}>
