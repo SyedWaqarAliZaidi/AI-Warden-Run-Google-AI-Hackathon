@@ -1,8 +1,7 @@
 import { VIEW_W, VIEW_H, GameEngine } from "./engine";
-import type { Enemy, Player, Vec } from "./types";
+import type { Enemy, Player } from "./types";
 
 export function render(ctx: CanvasRenderingContext2D, g: GameEngine) {
-  // ---- screen-space pass: background + parallax ----
   drawBackground(ctx, g);
 
   const shakeX = (Math.random() - 0.5) * g.shake;
@@ -13,15 +12,21 @@ export function render(ctx: CanvasRenderingContext2D, g: GameEngine) {
 
   drawWorldGrid(ctx, g);
   drawWalls(ctx, g);
+  drawExitGate(ctx, g);
   drawHazards(ctx, g);
+  drawPickups(ctx, g);
   drawParticles(ctx, g);
   drawBullets(ctx, g);
   drawEnemies(ctx, g);
   drawPlayer(ctx, g);
+  // stun warning telegraph
+  if (g.stunWarn > 0) drawStunWarning(ctx, g);
 
   ctx.restore();
 
-  // dim overlay during countdown
+  // blind vignette overlay
+  if (g.blindActive > 0) drawBlindVignette(ctx, g);
+
   if (g.state === "countdown") {
     ctx.fillStyle = "rgba(0,0,0,0.45)";
     ctx.fillRect(0, 0, VIEW_W, VIEW_H);
@@ -29,7 +34,6 @@ export function render(ctx: CanvasRenderingContext2D, g: GameEngine) {
 }
 
 function drawBackground(ctx: CanvasRenderingContext2D, g: GameEngine) {
-  // base gradient (deep cyber slate -> indigo)
   const grad = ctx.createLinearGradient(0, 0, 0, VIEW_H);
   grad.addColorStop(0, "#070b1d");
   grad.addColorStop(0.6, "#0a0f24");
@@ -37,7 +41,6 @@ function drawBackground(ctx: CanvasRenderingContext2D, g: GameEngine) {
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, VIEW_W, VIEW_H);
 
-  // far parallax: faint circuit traces
   const px = -g.cam.x * 0.15;
   const py = -g.cam.y * 0.15;
   ctx.strokeStyle = "rgba(60, 140, 200, 0.08)";
@@ -46,17 +49,14 @@ function drawBackground(ctx: CanvasRenderingContext2D, g: GameEngine) {
   const ox = ((px % step) + step) % step;
   const oy = ((py % step) + step) % step;
   for (let x = ox - step; x < VIEW_W + step; x += step) {
-    ctx.beginPath();
-    ctx.moveTo(x, 0); ctx.lineTo(x, VIEW_H); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, VIEW_H); ctx.stroke();
   }
   for (let y = oy - step; y < VIEW_H + step; y += step) {
-    ctx.beginPath();
-    ctx.moveTo(0, y); ctx.lineTo(VIEW_W, y); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(VIEW_W, y); ctx.stroke();
   }
-  // mid parallax: pulse nodes
   const t = performance.now() / 1000;
   ctx.fillStyle = "rgba(0, 200, 255, 0.18)";
-  for (let i = 0; i < 12; i++) {
+  for (let i = 0; i < 14; i++) {
     const sx = ((i * 173 - g.cam.x * 0.3) % (VIEW_W + 200) + VIEW_W + 200) % (VIEW_W + 200) - 100;
     const sy = ((i * 271 - g.cam.y * 0.3) % (VIEW_H + 200) + VIEW_H + 200) % (VIEW_H + 200) - 100;
     const r = 2 + (Math.sin(t * 2 + i) * 0.5 + 0.5) * 2;
@@ -81,36 +81,63 @@ function drawWorldGrid(ctx: CanvasRenderingContext2D, g: GameEngine) {
 function drawWalls(ctx: CanvasRenderingContext2D, g: GameEngine) {
   for (const w of g.walls) {
     if (w.kind === "gate") {
-      // gate: open archway look
       ctx.fillStyle = "rgba(160, 80, 255, 0.12)";
       ctx.fillRect(w.x, w.y, w.w, w.h);
       ctx.strokeStyle = "#b070ff";
-      ctx.shadowColor = "#b070ff";
-      ctx.shadowBlur = 12;
-      ctx.lineWidth = 2;
+      ctx.shadowColor = "#b070ff"; ctx.shadowBlur = 12; ctx.lineWidth = 2;
       ctx.setLineDash([8, 6]);
       ctx.strokeRect(w.x, w.y, w.w, w.h);
-      ctx.setLineDash([]);
-      ctx.shadowBlur = 0;
+      ctx.setLineDash([]); ctx.shadowBlur = 0;
     } else {
-      // metallic block with neon outline
       const grad = ctx.createLinearGradient(w.x, w.y, w.x, w.y + w.h);
       grad.addColorStop(0, "#1a2340");
       grad.addColorStop(1, "#0a0f24");
       ctx.fillStyle = grad;
       ctx.fillRect(w.x, w.y, w.w, w.h);
       ctx.strokeStyle = "#00d6ff";
-      ctx.shadowColor = "#00d6ff";
-      ctx.shadowBlur = 8;
-      ctx.lineWidth = 1.5;
+      ctx.shadowColor = "#00d6ff"; ctx.shadowBlur = 8; ctx.lineWidth = 1.5;
       ctx.strokeRect(w.x + 0.5, w.y + 0.5, w.w - 1, w.h - 1);
       ctx.shadowBlur = 0;
-      // inner detail
-      ctx.strokeStyle = "rgba(0, 214, 255, 0.25)";
-      ctx.lineWidth = 1;
+      ctx.strokeStyle = "rgba(0, 214, 255, 0.25)"; ctx.lineWidth = 1;
       ctx.strokeRect(w.x + 4, w.y + 4, w.w - 8, w.h - 8);
     }
   }
+}
+
+function drawExitGate(ctx: CanvasRenderingContext2D, g: GameEngine) {
+  if (g.level === 4) return; // boss-only victory
+  const gate = g.exitGate;
+  const open = gate.open;
+  const t = performance.now() / 1000;
+  const pulse = 0.5 + Math.sin(t * (open ? 6 : 2)) * 0.5;
+  const color = open ? "#00ffaa" : "#ff66aa";
+  ctx.save();
+  ctx.translate(gate.x, gate.y);
+  // outer ring
+  ctx.strokeStyle = color;
+  ctx.shadowColor = color;
+  ctx.shadowBlur = 20 + pulse * 20;
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.arc(0, 0, gate.r + pulse * 6, 0, Math.PI * 2);
+  ctx.stroke();
+  // inner ring
+  ctx.lineWidth = 2;
+  ctx.globalAlpha = 0.7;
+  ctx.beginPath();
+  ctx.arc(0, 0, gate.r - 14, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+  // arch
+  ctx.fillStyle = open ? "rgba(0,255,170,0.18)" : "rgba(255,80,160,0.12)";
+  ctx.fillRect(-gate.r * 0.6, -gate.r, gate.r * 1.2, gate.r * 2);
+  // label
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = color;
+  ctx.font = "bold 14px monospace";
+  ctx.textAlign = "center";
+  ctx.fillText(open ? "EXIT" : "LOCKED", 0, -gate.r - 14);
+  ctx.restore();
 }
 
 function drawHazards(ctx: CanvasRenderingContext2D, g: GameEngine) {
@@ -161,6 +188,37 @@ function drawHazards(ctx: CanvasRenderingContext2D, g: GameEngine) {
   }
 }
 
+function drawPickups(ctx: CanvasRenderingContext2D, g: GameEngine) {
+  const t = performance.now() / 1000;
+  for (const pk of g.pickups) {
+    if (pk.kind !== "heal") continue;
+    ctx.save();
+    ctx.translate(pk.pos.x, pk.pos.y);
+    const pulse = 0.5 + Math.sin(t * 4) * 0.5;
+    // outer halo
+    ctx.shadowColor = "#00ffaa";
+    ctx.shadowBlur = 24;
+    ctx.strokeStyle = "rgba(0,255,170,0.7)";
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(0, 0, pk.r + 8 + pulse * 4, 0, Math.PI * 2); ctx.stroke();
+    // body
+    ctx.fillStyle = "#04201a";
+    ctx.beginPath(); ctx.arc(0, 0, pk.r, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = "#00ffaa";
+    ctx.lineWidth = 2; ctx.stroke();
+    // cross
+    ctx.fillStyle = "#00ffaa";
+    ctx.shadowBlur = 14;
+    ctx.fillRect(-3, -10, 6, 20);
+    ctx.fillRect(-10, -3, 20, 6);
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = "rgba(0,255,170,0.9)";
+    ctx.font = "10px monospace"; ctx.textAlign = "center";
+    ctx.fillText("MED-CORE", 0, pk.r + 16);
+    ctx.restore();
+  }
+}
+
 function drawParticles(ctx: CanvasRenderingContext2D, g: GameEngine) {
   for (const p of g.particles) {
     const alpha = p.life / p.maxLife;
@@ -175,40 +233,81 @@ function drawBullets(ctx: CanvasRenderingContext2D, g: GameEngine) {
   for (const b of g.bullets) {
     ctx.fillStyle = b.fromPlayer ? "#00ffaa" : "#ff3b64";
     ctx.shadowColor = b.fromPlayer ? "#00ffaa" : "#ff3b64";
-    ctx.shadowBlur = 12;
-    // streak
+    ctx.shadowBlur = b.big ? 18 : 12;
     const ang = Math.atan2(b.vel.y, b.vel.x);
     ctx.save();
     ctx.translate(b.pos.x, b.pos.y);
     ctx.rotate(ang);
     ctx.beginPath();
-    ctx.ellipse(0, 0, 9, 3, 0, 0, Math.PI * 2);
+    ctx.ellipse(0, 0, b.big ? 12 : 9, b.big ? 4 : 3, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
   }
   ctx.shadowBlur = 0;
 }
 
+function drawStunWarning(ctx: CanvasRenderingContext2D, g: GameEngine) {
+  const t = performance.now() / 1000;
+  const pulse = 0.5 + Math.sin(t * 10) * 0.5;
+  ctx.save();
+  ctx.translate(g.player.pos.x, g.player.pos.y);
+  ctx.strokeStyle = "rgba(255,204,0," + (0.5 + pulse * 0.5) + ")";
+  ctx.shadowColor = "#ffcc00";
+  ctx.shadowBlur = 16;
+  ctx.lineWidth = 3;
+  ctx.setLineDash([10, 6]);
+  ctx.beginPath();
+  ctx.arc(0, 0, 70 + pulse * 8, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = "#ffcc00";
+  ctx.font = "bold 16px monospace";
+  ctx.textAlign = "center";
+  ctx.fillText("⚠ LOCKDOWN " + Math.ceil(g.stunWarn) + "s", 0, -90);
+  ctx.restore();
+}
+
+function drawBlindVignette(ctx: CanvasRenderingContext2D, g: GameEngine) {
+  const px = g.player.pos.x - g.cam.x;
+  const py = g.player.pos.y - g.cam.y;
+  const inner = 110;
+  const outer = 190;
+  const grad = ctx.createRadialGradient(px, py, inner, px, py, outer);
+  grad.addColorStop(0, "rgba(0,0,0,0)");
+  grad.addColorStop(0.4, "rgba(0,0,0,0.7)");
+  grad.addColorStop(1, "rgba(0,0,0,0.97)");
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+  // chromatic blue edge
+  ctx.strokeStyle = "rgba(0,200,255,0.15)";
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(px, py, inner, 0, Math.PI * 2); ctx.stroke();
+}
+
 function drawEnemies(ctx: CanvasRenderingContext2D, g: GameEngine) {
   for (const e of g.enemies) {
     if (e.isBoss) drawBoss(ctx, e);
+    else if (e.cls === "shooter") drawShooter(ctx, e);
+    else if (e.cls === "sniper") drawSniper(ctx, e);
+    else if (e.cls === "slasher") drawSlasher(ctx, e);
+    else if (e.cls === "shield") drawShield(ctx, e);
     else drawDrone(ctx, e);
   }
 }
 
-// ============ ANIMATED CHARACTERS ============
+// ============ PLAYER (DARK AI KNIGHT) ============
 
 function drawPlayer(ctx: CanvasRenderingContext2D, g: GameEngine) {
   const p = g.player;
   const ang = Math.atan2(p.facing.y, p.facing.x);
 
-  // dash afterimages
   if (p.dashTime > 0) {
     for (let i = 1; i <= 3; i++) {
       ctx.save();
-      ctx.globalAlpha = 0.25 * (1 - i / 4);
+      ctx.globalAlpha = 0.28 * (1 - i / 4);
       ctx.translate(p.pos.x - p.vel.x * 0.02 * i, p.pos.y - p.vel.y * 0.02 * i);
       ctx.rotate(ang);
+      ctx.scale(1.6, 1.6);
       drawKnightBody(ctx, p, true);
       ctx.restore();
     }
@@ -216,7 +315,7 @@ function drawPlayer(ctx: CanvasRenderingContext2D, g: GameEngine) {
 
   ctx.save();
   ctx.translate(p.pos.x, p.pos.y);
-  ctx.scale(p.scaleX, p.scaleY);
+  ctx.scale(p.scaleX * 1.6, p.scaleY * 1.6);
   ctx.rotate(ang);
   drawKnightBody(ctx, p, false);
   ctx.restore();
@@ -228,384 +327,590 @@ function drawKnightBody(ctx: CanvasRenderingContext2D, p: Player, ghost: boolean
   const dashing = p.anim === "dash";
   const hit = p.iFrames > 0 && Math.floor(t * 30) % 2 === 0;
   const victory = p.anim === "victory";
+  const attacking = p.anim === "attack" || p.attackSwing > 0.1;
 
-  // bob / leg swing
-  const bob = running ? Math.sin(t * 14) * 1.5 : 0;
-  const legSwing = running ? Math.sin(t * 14) * 4 : 0;
+  const bob = running ? Math.sin(t * 16) * 1.8 : 0;
+  const legSwing = running ? Math.sin(t * 16) * 5 : 0;
+  const armSwing = running ? Math.sin(t * 16 + Math.PI) * 3 : 0;
 
   // shadow
-  ctx.fillStyle = "rgba(0,0,0,0.45)";
-  ctx.beginPath();
-  ctx.ellipse(0, 12, 14, 4, 0, 0, Math.PI * 2);
-  ctx.fill();
+  ctx.fillStyle = "rgba(0,0,0,0.5)";
+  ctx.beginPath(); ctx.ellipse(0, 13, 16, 5, 0, 0, Math.PI * 2); ctx.fill();
 
-  // cape (behind body) - flutters
+  // cape (behind body)
   ctx.save();
-  ctx.translate(-8, bob);
-  const cf = Math.sin(t * 6) * 2;
+  ctx.translate(-9, bob);
+  const cf = Math.sin(t * 7) * 2.5;
   ctx.fillStyle = ghost ? "rgba(80,0,140,0.4)" : "#160028";
   ctx.strokeStyle = "#7a00ff";
-  ctx.shadowColor = "#7a00ff";
-  ctx.shadowBlur = 8;
-  ctx.lineWidth = 1.5;
+  ctx.shadowColor = "#7a00ff"; ctx.shadowBlur = 10; ctx.lineWidth = 1.5;
   ctx.beginPath();
   ctx.moveTo(0, -8);
-  ctx.lineTo(-14 + cf, -2);
-  ctx.lineTo(-12 + cf, 6);
-  ctx.lineTo(-16 + cf, 10);
-  ctx.lineTo(-6, 4);
-  ctx.lineTo(0, 8);
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
+  ctx.lineTo(-16 + cf, -2);
+  ctx.lineTo(-14 + cf, 7);
+  ctx.lineTo(-18 + cf, 11);
+  ctx.lineTo(-6, 5);
+  ctx.lineTo(0, 9);
+  ctx.closePath(); ctx.fill(); ctx.stroke();
   ctx.shadowBlur = 0;
   ctx.restore();
 
   // legs
-  ctx.strokeStyle = "#222";
-  ctx.lineWidth = 4;
+  ctx.strokeStyle = "#161620"; ctx.lineWidth = 5;
   ctx.beginPath();
-  ctx.moveTo(-2, 6); ctx.lineTo(-4 - legSwing, 14);
-  ctx.moveTo(2, 6);  ctx.lineTo(4 + legSwing, 14);
+  ctx.moveTo(-3, 6); ctx.lineTo(-5 - legSwing, 15);
+  ctx.moveTo(3, 6);  ctx.lineTo(5 + legSwing, 15);
   ctx.stroke();
-  // boot glow
   ctx.fillStyle = "#9d4dff";
-  ctx.beginPath(); ctx.arc(-4 - legSwing, 14, 1.8, 0, Math.PI * 2); ctx.fill();
-  ctx.beginPath(); ctx.arc(4 + legSwing, 14, 1.8, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(-5 - legSwing, 15, 2, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(5 + legSwing, 15, 2, 0, Math.PI * 2); ctx.fill();
 
-  // body (dark plate)
+  // body
   const bodyGrad = ctx.createLinearGradient(0, -8 + bob, 0, 8 + bob);
   bodyGrad.addColorStop(0, hit ? "#fff" : "#1a1a24");
   bodyGrad.addColorStop(1, hit ? "#fff" : "#05060e");
   ctx.fillStyle = bodyGrad;
   ctx.strokeStyle = ghost ? "rgba(157,77,255,0.6)" : "#9d4dff";
-  ctx.shadowColor = "#9d4dff";
-  ctx.shadowBlur = ghost ? 6 : 10;
-  ctx.lineWidth = 1.8;
+  ctx.shadowColor = "#9d4dff"; ctx.shadowBlur = ghost ? 6 : 12; ctx.lineWidth = 1.8;
   ctx.beginPath();
-  ctx.moveTo(-6, -2 + bob);
-  ctx.lineTo(-8, 6 + bob);
-  ctx.lineTo(8, 6 + bob);
-  ctx.lineTo(6, -2 + bob);
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-  // chest emblem (glowing diamond)
+  ctx.moveTo(-7, -3 + bob);
+  ctx.lineTo(-9, 6 + bob);
+  ctx.lineTo(9, 6 + bob);
+  ctx.lineTo(7, -3 + bob);
+  ctx.closePath(); ctx.fill(); ctx.stroke();
   ctx.fillStyle = "#00f0ff";
   ctx.beginPath();
-  ctx.moveTo(0, -2 + bob); ctx.lineTo(3, 2 + bob); ctx.lineTo(0, 6 + bob); ctx.lineTo(-3, 2 + bob);
+  ctx.moveTo(0, -3 + bob); ctx.lineTo(3.5, 2 + bob); ctx.lineTo(0, 6 + bob); ctx.lineTo(-3.5, 2 + bob);
   ctx.closePath(); ctx.fill();
   ctx.shadowBlur = 0;
 
-  // shoulder pauldrons
-  ctx.fillStyle = "#0a0a14";
-  ctx.strokeStyle = "#7a00ff";
-  ctx.lineWidth = 1.5;
-  ctx.beginPath(); ctx.arc(-7, -1 + bob, 3.5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-  ctx.beginPath(); ctx.arc(7, -1 + bob, 3.5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  // pauldrons
+  ctx.fillStyle = "#0a0a14"; ctx.strokeStyle = "#7a00ff"; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.arc(-8, -1 + bob, 4, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  ctx.beginPath(); ctx.arc(8, -1 + bob, 4, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
 
-  // arms — left arm holds sword, right arm shield
-  // shield (back hand side)
+  // shield arm
   ctx.save();
-  ctx.translate(-2, 2 + bob);
+  ctx.translate(-2, 2 + bob + armSwing * 0.4);
   ctx.rotate(-0.3);
-  ctx.fillStyle = "#0d0d1a";
-  ctx.strokeStyle = "#00d6ff";
-  ctx.shadowColor = "#00d6ff";
-  ctx.shadowBlur = 6;
-  ctx.lineWidth = 1.5;
+  ctx.fillStyle = "#0d0d1a"; ctx.strokeStyle = "#00d6ff";
+  ctx.shadowColor = "#00d6ff"; ctx.shadowBlur = 8; ctx.lineWidth = 1.5;
   ctx.beginPath();
-  ctx.moveTo(-6, -4); ctx.lineTo(0, -6); ctx.lineTo(6, -4);
-  ctx.lineTo(4, 6); ctx.lineTo(0, 8); ctx.lineTo(-4, 6);
-  ctx.closePath();
-  ctx.fill(); ctx.stroke();
+  ctx.moveTo(-7, -5); ctx.lineTo(0, -7); ctx.lineTo(7, -5);
+  ctx.lineTo(5, 7); ctx.lineTo(0, 9); ctx.lineTo(-5, 7);
+  ctx.closePath(); ctx.fill(); ctx.stroke();
   ctx.shadowBlur = 0;
   ctx.restore();
 
-  // sword — held forward; swings on attackSwing / victory
-  const swing = victory ? Math.sin(t * 8) * 0.2 - 1.1 : -p.attackSwing * 0.9;
+  // sword
+  const swing = victory ? Math.sin(t * 8) * 0.2 - 1.1
+              : attacking ? -1.6 + (1 - p.attackSwing) * 1.6
+              : -p.attackSwing * 0.9 - armSwing * 0.05;
   ctx.save();
-  ctx.translate(4, 0 + bob);
+  ctx.translate(5, 0 + bob);
   ctx.rotate(swing);
-  // grip
-  ctx.fillStyle = "#222";
-  ctx.fillRect(0, -1, 4, 2);
-  // crossguard
-  ctx.fillStyle = "#9d4dff";
-  ctx.fillRect(4, -3, 2, 6);
-  // blade (glowing energy)
-  const bladeGrad = ctx.createLinearGradient(6, 0, 26, 0);
+  ctx.fillStyle = "#222"; ctx.fillRect(0, -1, 4, 2);
+  ctx.fillStyle = "#9d4dff"; ctx.fillRect(4, -3, 2, 6);
+  const bladeGrad = ctx.createLinearGradient(6, 0, 30, 0);
   bladeGrad.addColorStop(0, "#ffffff");
   bladeGrad.addColorStop(1, "#00f0ff");
   ctx.fillStyle = bladeGrad;
   ctx.shadowColor = "#00f0ff";
-  ctx.shadowBlur = dashing || victory ? 18 : 10;
+  ctx.shadowBlur = dashing || victory || attacking ? 22 : 12;
   ctx.beginPath();
-  ctx.moveTo(6, -1.5); ctx.lineTo(26, -0.5); ctx.lineTo(28, 0); ctx.lineTo(26, 0.5); ctx.lineTo(6, 1.5);
-  ctx.closePath();
-  ctx.fill();
+  ctx.moveTo(6, -1.8); ctx.lineTo(30, -0.6); ctx.lineTo(32, 0); ctx.lineTo(30, 0.6); ctx.lineTo(6, 1.8);
+  ctx.closePath(); ctx.fill();
+  // attack arc trail
+  if (attacking || victory) {
+    ctx.strokeStyle = "rgba(0,240,255,0.6)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(0, 0, 22, swing - 0.6, swing + 0.6);
+    ctx.stroke();
+  }
   ctx.shadowBlur = 0;
   ctx.restore();
 
   // helmet
   ctx.save();
-  ctx.translate(0, -8 + bob);
-  // helm dome
+  ctx.translate(0, -9 + bob);
   ctx.fillStyle = hit ? "#fff" : "#0a0a14";
   ctx.strokeStyle = "#9d4dff";
-  ctx.shadowColor = "#9d4dff";
-  ctx.shadowBlur = 10;
-  ctx.lineWidth = 1.8;
+  ctx.shadowColor = "#9d4dff"; ctx.shadowBlur = 12; ctx.lineWidth = 1.8;
   ctx.beginPath();
-  ctx.moveTo(-6, 4);
-  ctx.quadraticCurveTo(-7, -4, 0, -6);
-  ctx.quadraticCurveTo(7, -4, 6, 4);
-  ctx.closePath();
-  ctx.fill(); ctx.stroke();
+  ctx.moveTo(-7, 4);
+  ctx.quadraticCurveTo(-8, -5, 0, -7);
+  ctx.quadraticCurveTo(8, -5, 7, 4);
+  ctx.closePath(); ctx.fill(); ctx.stroke();
   ctx.shadowBlur = 0;
-  // T-visor (glow slit)
   ctx.fillStyle = "#00f0ff";
-  ctx.shadowColor = "#00f0ff";
-  ctx.shadowBlur = 8;
-  ctx.fillRect(-3, -2, 6, 1.5); // horizontal
-  ctx.fillRect(-0.6, -2, 1.2, 4); // vertical
+  ctx.shadowColor = "#00f0ff"; ctx.shadowBlur = 10;
+  ctx.fillRect(-3.5, -2, 7, 1.6);
+  ctx.fillRect(-0.7, -2, 1.4, 4.5);
   ctx.shadowBlur = 0;
-  // small horns / crest
-  ctx.strokeStyle = "#7a00ff";
-  ctx.lineWidth = 1.2;
+  ctx.strokeStyle = "#7a00ff"; ctx.lineWidth = 1.4;
   ctx.beginPath();
-  ctx.moveTo(-5, -3); ctx.lineTo(-8, -7);
-  ctx.moveTo(5, -3); ctx.lineTo(8, -7);
+  ctx.moveTo(-6, -3); ctx.lineTo(-9, -8);
+  ctx.moveTo(6, -3); ctx.lineTo(9, -8);
   ctx.stroke();
   ctx.restore();
 }
+
+// ============ ENEMY DRAWERS ============
 
 function drawDrone(ctx: CanvasRenderingContext2D, e: Enemy) {
   const t = e.animTime;
   ctx.save();
   ctx.translate(e.pos.x, e.pos.y);
-  // shadow
   ctx.fillStyle = "rgba(0,0,0,0.4)";
-  ctx.beginPath(); ctx.ellipse(0, 14, 12, 3, 0, 0, Math.PI * 2); ctx.fill();
-  // hover bob
-  ctx.translate(0, Math.sin(t * 4) * 1.5);
+  ctx.beginPath(); ctx.ellipse(0, 18, 14, 4, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.translate(0, Math.sin(t * 4) * 1.8);
   ctx.rotate(t * 1.2);
-  const baseColor = e.hitFlash > 0 ? "#fff" : e.shielded ? "#88ddff" : "#ff5577";
+  const baseColor = e.hitFlash > 0 ? "#fff" : "#ff5577";
   ctx.strokeStyle = baseColor;
   ctx.fillStyle = e.hitFlash > 0 ? "rgba(255,255,255,0.5)" : "rgba(255,85,119,0.18)";
-  ctx.shadowColor = baseColor;
-  ctx.shadowBlur = 10;
-  ctx.lineWidth = 2;
-  // rotating triangle frame
+  ctx.shadowColor = baseColor; ctx.shadowBlur = 12; ctx.lineWidth = 2.2;
   const r = e.radius;
   ctx.beginPath();
   for (let k = 0; k < 3; k++) {
     const a = (k / 3) * Math.PI * 2;
-    const x = Math.cos(a) * r;
-    const y = Math.sin(a) * r;
+    const x = Math.cos(a) * r, y = Math.sin(a) * r;
     if (k === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
   }
   ctx.closePath(); ctx.fill(); ctx.stroke();
-  // inner counter-rotating square
   ctx.rotate(-t * 2.4);
-  ctx.beginPath();
-  ctx.rect(-r * 0.4, -r * 0.4, r * 0.8, r * 0.8);
-  ctx.stroke();
-  // central eye
+  ctx.beginPath(); ctx.rect(-r * 0.4, -r * 0.4, r * 0.8, r * 0.8); ctx.stroke();
   ctx.fillStyle = baseColor;
-  ctx.beginPath(); ctx.arc(0, 0, 3, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(0, 0, 4, 0, Math.PI * 2); ctx.fill();
   ctx.shadowBlur = 0;
   ctx.restore();
+}
 
-  // shield aura
-  if (e.shielded) {
+function drawShooter(ctx: CanvasRenderingContext2D, e: Enemy) {
+  const t = e.animTime;
+  const ang = Math.atan2(e.facing.y, e.facing.x);
+  ctx.save();
+  ctx.translate(e.pos.x, e.pos.y);
+  ctx.fillStyle = "rgba(0,0,0,0.45)";
+  ctx.beginPath(); ctx.ellipse(0, 20, 18, 5, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.rotate(ang);
+  const bob = Math.sin(t * 8) * 1.5;
+  const flash = e.hitFlash > 0;
+  // body (armored torso)
+  ctx.fillStyle = flash ? "#fff" : "#3a0e2e";
+  ctx.strokeStyle = "#ff66aa";
+  ctx.shadowColor = "#ff66aa"; ctx.shadowBlur = 10; ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(-12, -8 + bob); ctx.lineTo(12, -8 + bob);
+  ctx.lineTo(14, 10 + bob); ctx.lineTo(-14, 10 + bob);
+  ctx.closePath(); ctx.fill(); ctx.stroke();
+  // helmet visor
+  ctx.fillStyle = "#0a0008";
+  ctx.fillRect(-8, -16 + bob, 16, 8);
+  ctx.fillStyle = "#ff44aa";
+  ctx.fillRect(-6, -13 + bob, 12, 2);
+  ctx.shadowBlur = 0;
+  // gun arm
+  ctx.fillStyle = "#1a1a24";
+  ctx.fillRect(8, -4 + bob, 18, 5);
+  ctx.fillStyle = "#ff66aa";
+  ctx.fillRect(24, -3 + bob, 4, 3);
+  // dagger (visible when close)
+  ctx.strokeStyle = "#00f0ff"; ctx.lineWidth = 2;
+  ctx.shadowColor = "#00f0ff"; ctx.shadowBlur = 6;
+  ctx.beginPath();
+  const swing = e.attackTimer > 0 ? Math.sin((0.4 - e.attackTimer) * 14) * 1.0 : 0;
+  ctx.save();
+  ctx.translate(-12, 2 + bob);
+  ctx.rotate(-1 + swing);
+  ctx.moveTo(0, 0); ctx.lineTo(10, -2);
+  ctx.stroke();
+  ctx.restore();
+  ctx.shadowBlur = 0;
+  // legs
+  ctx.strokeStyle = "#1a0010"; ctx.lineWidth = 3;
+  const ls = Math.sin(t * 8) * 3;
+  ctx.beginPath();
+  ctx.moveTo(-6, 10 + bob); ctx.lineTo(-7 - ls, 20 + bob);
+  ctx.moveTo(6, 10 + bob); ctx.lineTo(7 + ls, 20 + bob);
+  ctx.stroke();
+  ctx.restore();
+  drawEnemyHpBar(ctx, e);
+}
+
+function drawSniper(ctx: CanvasRenderingContext2D, e: Enemy) {
+  const t = e.animTime;
+  const ang = Math.atan2(e.facing.y, e.facing.x);
+  ctx.save();
+  ctx.translate(e.pos.x, e.pos.y);
+  ctx.fillStyle = "rgba(0,0,0,0.45)";
+  ctx.beginPath(); ctx.ellipse(0, 20, 16, 4, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.rotate(ang);
+  const flash = e.hitFlash > 0;
+  // cloaked body
+  ctx.fillStyle = flash ? "#fff" : "#0a1428";
+  ctx.strokeStyle = "#22d3ee";
+  ctx.shadowColor = "#22d3ee"; ctx.shadowBlur = 10; ctx.lineWidth = 1.8;
+  ctx.beginPath();
+  ctx.moveTo(-10, -12); ctx.lineTo(10, -12);
+  ctx.lineTo(14, 14); ctx.lineTo(-14, 14);
+  ctx.closePath(); ctx.fill(); ctx.stroke();
+  // hood
+  ctx.fillStyle = "#020616";
+  ctx.beginPath();
+  ctx.moveTo(-10, -12); ctx.quadraticCurveTo(0, -22, 10, -12);
+  ctx.closePath(); ctx.fill();
+  // single sniper visor (red dot scope)
+  ctx.fillStyle = "#ff0044";
+  ctx.shadowColor = "#ff0044"; ctx.shadowBlur = 12;
+  ctx.beginPath(); ctx.arc(2, -10, 2.6, 0, Math.PI * 2); ctx.fill();
+  ctx.shadowBlur = 0;
+  // long rifle
+  ctx.fillStyle = "#1a1a2a";
+  ctx.fillRect(4, -3, 34, 4);
+  ctx.fillStyle = "#22d3ee";
+  ctx.fillRect(34, -2, 4, 2);
+  // scope
+  ctx.strokeStyle = "#22d3ee"; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.arc(16, -5, 3, 0, Math.PI * 2); ctx.stroke();
+  // laser sight line (only when ready)
+  if (e.shootCd < 0.6) {
+    ctx.strokeStyle = "rgba(255,0,68,0.4)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(34, 0); ctx.lineTo(34 + 800, 0);
+    ctx.stroke();
+  }
+  // legs
+  ctx.strokeStyle = "#020616"; ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(-5, 14); ctx.lineTo(-6, 22);
+  ctx.moveTo(5, 14); ctx.lineTo(6, 22);
+  ctx.stroke();
+  ctx.restore();
+  drawEnemyHpBar(ctx, e);
+  void t;
+}
+
+function drawSlasher(ctx: CanvasRenderingContext2D, e: Enemy) {
+  const t = e.animTime;
+  const ang = Math.atan2(e.facing.y, e.facing.x);
+  // dash afterimage
+  if (e.dashTime > 0) {
+    for (let i = 1; i <= 3; i++) {
+      ctx.save();
+      ctx.globalAlpha = 0.25 * (1 - i / 4);
+      ctx.translate(e.pos.x - e.vel.x * 0.015 * i, e.pos.y - e.vel.y * 0.015 * i);
+      ctx.rotate(ang);
+      drawSlasherBody(ctx, e, t);
+      ctx.restore();
+    }
+  }
+  ctx.save();
+  ctx.translate(e.pos.x, e.pos.y);
+  ctx.fillStyle = "rgba(0,0,0,0.4)";
+  ctx.beginPath(); ctx.ellipse(0, 20, 16, 4, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.rotate(ang);
+  drawSlasherBody(ctx, e, t);
+  ctx.restore();
+  drawEnemyHpBar(ctx, e);
+}
+
+function drawSlasherBody(ctx: CanvasRenderingContext2D, e: Enemy, t: number) {
+  const flash = e.hitFlash > 0;
+  const swing = e.attackTimer > 0 ? Math.sin((0.3 - e.attackTimer) * 16) * 1.4 : Math.sin(t * 10) * 0.3;
+  // legs sprinting
+  const ls = Math.sin(t * 18) * 5;
+  ctx.strokeStyle = "#220010"; ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(-4, 8); ctx.lineTo(-5 - ls, 18);
+  ctx.moveTo(4, 8);  ctx.lineTo(5 + ls, 18);
+  ctx.stroke();
+  // sleek body
+  ctx.fillStyle = flash ? "#fff" : "#160018";
+  ctx.strokeStyle = "#ff44ff";
+  ctx.shadowColor = "#ff44ff"; ctx.shadowBlur = 12; ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(-10, -10); ctx.lineTo(10, -10);
+  ctx.lineTo(12, 8); ctx.lineTo(-12, 8);
+  ctx.closePath(); ctx.fill(); ctx.stroke();
+  // hooded helm with single slit
+  ctx.fillStyle = "#0a0010";
+  ctx.beginPath();
+  ctx.moveTo(-9, -10); ctx.quadraticCurveTo(0, -20, 9, -10);
+  ctx.closePath(); ctx.fill();
+  ctx.fillStyle = "#ff44ff";
+  ctx.shadowColor = "#ff44ff"; ctx.shadowBlur = 10;
+  ctx.fillRect(-5, -12, 10, 2);
+  ctx.shadowBlur = 0;
+  // twin claws
+  ctx.save();
+  ctx.translate(0, 2);
+  ctx.rotate(swing);
+  ctx.strokeStyle = "#ff66ff"; ctx.lineWidth = 2;
+  ctx.shadowColor = "#ff66ff"; ctx.shadowBlur = 10;
+  ctx.beginPath();
+  ctx.moveTo(10, -2); ctx.lineTo(24, -6);
+  ctx.moveTo(10, 2);  ctx.lineTo(24, 6);
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+  ctx.restore();
+}
+
+function drawShield(ctx: CanvasRenderingContext2D, e: Enemy) {
+  const t = e.animTime;
+  const ang = Math.atan2(e.facing.y, e.facing.x);
+  ctx.save();
+  ctx.translate(e.pos.x, e.pos.y);
+  ctx.fillStyle = "rgba(0,0,0,0.55)";
+  ctx.beginPath(); ctx.ellipse(0, 24, 24, 6, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.rotate(ang);
+  const flash = e.hitFlash > 0;
+  // bulky body
+  ctx.fillStyle = flash ? "#fff" : "#0a1828";
+  ctx.strokeStyle = "#88ddff";
+  ctx.shadowColor = "#88ddff"; ctx.shadowBlur = 12; ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  ctx.moveTo(-16, -12); ctx.lineTo(16, -12);
+  ctx.lineTo(20, 14); ctx.lineTo(-20, 14);
+  ctx.closePath(); ctx.fill(); ctx.stroke();
+  // dome head
+  ctx.fillStyle = "#0a1828";
+  ctx.beginPath(); ctx.arc(0, -14, 10, Math.PI, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = "#88ddff"; ctx.lineWidth = 1.8; ctx.stroke();
+  // visor
+  ctx.fillStyle = "#88ddff";
+  ctx.shadowColor = "#88ddff"; ctx.shadowBlur = 10;
+  ctx.fillRect(-7, -15, 14, 2.5);
+  ctx.shadowBlur = 0;
+  // giant tower shield in front
+  ctx.save();
+  ctx.translate(18, 0);
+  ctx.fillStyle = "#001a2e";
+  ctx.strokeStyle = "#22d3ee"; ctx.lineWidth = 2;
+  ctx.shadowColor = "#22d3ee"; ctx.shadowBlur = 14;
+  ctx.beginPath();
+  ctx.moveTo(0, -16); ctx.lineTo(10, -12);
+  ctx.lineTo(10, 12); ctx.lineTo(0, 16);
+  ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.shadowBlur = 0;
+  ctx.restore();
+  ctx.restore();
+
+  // active shield bubble
+  if (e.shieldActive) {
     ctx.save();
     ctx.translate(e.pos.x, e.pos.y);
+    const r = 50 + Math.sin(t * 6) * 3;
+    const grad = ctx.createRadialGradient(0, 0, r * 0.5, 0, 0, r);
+    grad.addColorStop(0, "rgba(136,221,255,0.05)");
+    grad.addColorStop(1, "rgba(136,221,255,0.35)");
+    ctx.fillStyle = grad;
+    ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.fill();
     ctx.strokeStyle = "#88ddff";
-    ctx.shadowColor = "#88ddff";
-    ctx.shadowBlur = 12;
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.arc(0, 0, e.radius + 6 + Math.sin(t * 6) * 1.5, 0, Math.PI * 2);
-    ctx.stroke();
+    ctx.shadowColor = "#88ddff"; ctx.shadowBlur = 18; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.stroke();
     ctx.shadowBlur = 0;
     ctx.restore();
   }
+  drawEnemyHpBar(ctx, e);
 }
+
+function drawEnemyHpBar(ctx: CanvasRenderingContext2D, e: Enemy) {
+  if (e.hp >= e.maxHp) return;
+  ctx.save();
+  ctx.translate(e.pos.x, e.pos.y - e.radius - 14);
+  ctx.fillStyle = "rgba(0,0,0,0.55)";
+  ctx.fillRect(-22, 0, 44, 4);
+  ctx.fillStyle = e.shieldActive ? "#88ddff" : "#ff66aa";
+  ctx.fillRect(-22, 0, 44 * Math.max(0, e.hp / e.maxHp), 4);
+  ctx.strokeStyle = "rgba(255,255,255,0.4)"; ctx.lineWidth = 1;
+  ctx.strokeRect(-22, 0, 44, 4);
+  ctx.restore();
+}
+
+// ============ BOSS ============
 
 function drawBoss(ctx: CanvasRenderingContext2D, e: Enemy) {
   const t = e.animTime;
+  const phase2 = e.bossPhase === 2;
+  const scale = phase2 ? 2.0 : 1.7;
   ctx.save();
   ctx.translate(e.pos.x, e.pos.y);
-  // shadow
-  ctx.fillStyle = "rgba(0,0,0,0.5)";
-  ctx.beginPath(); ctx.ellipse(0, 36, 36, 8, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = "rgba(0,0,0,0.55)";
+  ctx.beginPath(); ctx.ellipse(0, 56, 48 * (scale / 1.7), 10, 0, 0, Math.PI * 2); ctx.fill();
   const ang = Math.atan2(e.facing.y, e.facing.x);
-  ctx.rotate(ang + Math.PI / 2); // face direction (sprite up)
+  ctx.rotate(ang + Math.PI / 2);
+  ctx.scale(scale, scale);
   const bob = Math.sin(t * 4) * 2;
   const flash = e.hitFlash > 0;
 
-  // legs (cyber greaves)
-  ctx.strokeStyle = "#1a0010";
-  ctx.lineWidth = 6;
+  // bullet immunity aura (phase 2)
+  if (phase2) {
+    const r = 60 + Math.sin(t * 5) * 6;
+    ctx.save();
+    ctx.strokeStyle = "rgba(255,0,200,0.5)";
+    ctx.shadowColor = "#ff00cc"; ctx.shadowBlur = 20;
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.stroke();
+    ctx.setLineDash([6, 6]);
+    ctx.beginPath(); ctx.arc(0, 0, r + 10, 0, Math.PI * 2); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
+  }
+
+  // legs
+  ctx.strokeStyle = "#1a0010"; ctx.lineWidth = 7;
   const legS = Math.sin(t * 6) * 4;
   ctx.beginPath();
-  ctx.moveTo(-8, 18 + bob); ctx.lineTo(-10 - legS, 32 + bob);
-  ctx.moveTo(8, 18 + bob);  ctx.lineTo(10 + legS, 32 + bob);
+  ctx.moveTo(-10, 20 + bob); ctx.lineTo(-12 - legS, 36 + bob);
+  ctx.moveTo(10, 20 + bob);  ctx.lineTo(12 + legS, 36 + bob);
   ctx.stroke();
-  ctx.fillStyle = "#ff00cc";
-  ctx.beginPath(); ctx.arc(-10 - legS, 32 + bob, 2.5, 0, Math.PI * 2); ctx.fill();
-  ctx.beginPath(); ctx.arc(10 + legS, 32 + bob, 2.5, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = phase2 ? "#ff00ff" : "#ff00cc";
+  ctx.beginPath(); ctx.arc(-12 - legS, 36 + bob, 3, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(12 + legS, 36 + bob, 3, 0, Math.PI * 2); ctx.fill();
 
   // cape
   ctx.save();
-  const cf = Math.sin(t * 3) * 4;
-  ctx.fillStyle = "#22001a";
+  const cf = Math.sin(t * 3) * 5;
+  ctx.fillStyle = phase2 ? "#3d0030" : "#22001a";
   ctx.strokeStyle = "#ff00cc";
-  ctx.shadowColor = "#ff00cc";
-  ctx.shadowBlur = 10;
-  ctx.lineWidth = 1.8;
+  ctx.shadowColor = "#ff00cc"; ctx.shadowBlur = 12; ctx.lineWidth = 2;
   ctx.beginPath();
-  ctx.moveTo(-14, -10 + bob);
-  ctx.lineTo(-24 + cf, 0 + bob);
-  ctx.lineTo(-22 + cf, 16 + bob);
-  ctx.lineTo(-28 + cf, 28 + bob);
-  ctx.lineTo(-6, 18 + bob);
-  ctx.lineTo(6, 18 + bob);
-  ctx.lineTo(28 - cf, 28 + bob);
-  ctx.lineTo(22 - cf, 16 + bob);
-  ctx.lineTo(24 - cf, 0 + bob);
-  ctx.lineTo(14, -10 + bob);
-  ctx.closePath();
-  ctx.fill(); ctx.stroke();
+  ctx.moveTo(-16, -12 + bob);
+  ctx.lineTo(-28 + cf, 0 + bob);
+  ctx.lineTo(-26 + cf, 18 + bob);
+  ctx.lineTo(-32 + cf, 32 + bob);
+  ctx.lineTo(-7, 20 + bob);
+  ctx.lineTo(7, 20 + bob);
+  ctx.lineTo(32 - cf, 32 + bob);
+  ctx.lineTo(26 - cf, 18 + bob);
+  ctx.lineTo(28 - cf, 0 + bob);
+  ctx.lineTo(16, -12 + bob);
+  ctx.closePath(); ctx.fill(); ctx.stroke();
   ctx.shadowBlur = 0;
   ctx.restore();
 
-  // torso (cuirass)
-  const grad = ctx.createLinearGradient(0, -10 + bob, 0, 20 + bob);
-  grad.addColorStop(0, flash ? "#fff" : "#2a0018");
+  // torso
+  const grad = ctx.createLinearGradient(0, -12 + bob, 0, 22 + bob);
+  grad.addColorStop(0, flash ? "#fff" : (phase2 ? "#4a002e" : "#2a0018"));
   grad.addColorStop(1, flash ? "#fff" : "#0a0008");
   ctx.fillStyle = grad;
   ctx.strokeStyle = "#ff00cc";
-  ctx.shadowColor = "#ff00cc";
-  ctx.shadowBlur = 16;
-  ctx.lineWidth = 2.5;
+  ctx.shadowColor = "#ff00cc"; ctx.shadowBlur = 18; ctx.lineWidth = 3;
   ctx.beginPath();
-  ctx.moveTo(-14, -8 + bob);
-  ctx.lineTo(-18, 12 + bob);
-  ctx.lineTo(-10, 22 + bob);
-  ctx.lineTo(10, 22 + bob);
-  ctx.lineTo(18, 12 + bob);
-  ctx.lineTo(14, -8 + bob);
-  ctx.closePath();
-  ctx.fill(); ctx.stroke();
-  // abdominal lights
+  ctx.moveTo(-16, -10 + bob);
+  ctx.lineTo(-20, 14 + bob);
+  ctx.lineTo(-12, 24 + bob);
+  ctx.lineTo(12, 24 + bob);
+  ctx.lineTo(20, 14 + bob);
+  ctx.lineTo(16, -10 + bob);
+  ctx.closePath(); ctx.fill(); ctx.stroke();
   ctx.fillStyle = "#ff66ee";
-  for (let i = 0; i < 3; i++) {
-    ctx.fillRect(-6, -2 + bob + i * 6, 12, 1.2);
-  }
+  for (let i = 0; i < 3; i++) ctx.fillRect(-7, -2 + bob + i * 7, 14, 1.4);
   ctx.shadowBlur = 0;
 
-  // pauldrons (cyber-gladiator big shoulders)
-  ctx.fillStyle = "#1a0010";
-  ctx.strokeStyle = "#ff00cc";
-  ctx.lineWidth = 2;
-  ctx.shadowColor = "#ff00cc";
-  ctx.shadowBlur = 10;
-  ctx.beginPath(); ctx.arc(-18, -4 + bob, 10, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-  ctx.beginPath(); ctx.arc(18, -4 + bob, 10, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  // pauldrons
+  ctx.fillStyle = "#1a0010"; ctx.strokeStyle = "#ff00cc"; ctx.lineWidth = 2;
+  ctx.shadowColor = "#ff00cc"; ctx.shadowBlur = 12;
+  ctx.beginPath(); ctx.arc(-20, -4 + bob, 12, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  ctx.beginPath(); ctx.arc(20, -4 + bob, 12, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
   ctx.shadowBlur = 0;
-  // pauldron spikes
-  ctx.strokeStyle = "#ff66ee";
-  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = "#ff66ee"; ctx.lineWidth = 1.5;
   ctx.beginPath();
-  ctx.moveTo(-22, -10 + bob); ctx.lineTo(-26, -18 + bob);
-  ctx.moveTo(-18, -14 + bob); ctx.lineTo(-18, -22 + bob);
-  ctx.moveTo(22, -10 + bob); ctx.lineTo(26, -18 + bob);
-  ctx.moveTo(18, -14 + bob); ctx.lineTo(18, -22 + bob);
+  ctx.moveTo(-24, -12 + bob); ctx.lineTo(-30, -22 + bob);
+  ctx.moveTo(-20, -16 + bob); ctx.lineTo(-20, -26 + bob);
+  ctx.moveTo(24, -12 + bob); ctx.lineTo(30, -22 + bob);
+  ctx.moveTo(20, -16 + bob); ctx.lineTo(20, -26 + bob);
   ctx.stroke();
 
-  // shield (left)
+  // shield
   ctx.save();
-  ctx.translate(-22, 8 + bob);
-  ctx.rotate(-0.2);
-  ctx.fillStyle = "#0a0008";
-  ctx.strokeStyle = "#ff00cc";
-  ctx.shadowColor = "#ff00cc";
-  ctx.shadowBlur = 10;
-  ctx.lineWidth = 2;
+  ctx.translate(-26, 10 + bob); ctx.rotate(-0.2);
+  ctx.fillStyle = "#0a0008"; ctx.strokeStyle = "#ff00cc";
+  ctx.shadowColor = "#ff00cc"; ctx.shadowBlur = 12; ctx.lineWidth = 2;
   ctx.beginPath();
-  ctx.moveTo(-10, -12); ctx.lineTo(0, -14); ctx.lineTo(10, -12);
-  ctx.lineTo(8, 12); ctx.lineTo(0, 16); ctx.lineTo(-8, 12);
+  ctx.moveTo(-12, -14); ctx.lineTo(0, -16); ctx.lineTo(12, -14);
+  ctx.lineTo(10, 14); ctx.lineTo(0, 18); ctx.lineTo(-10, 14);
   ctx.closePath(); ctx.fill(); ctx.stroke();
-  // crest
   ctx.fillStyle = "#ff00cc";
-  ctx.beginPath(); ctx.arc(0, 0, 3, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(0, 0, 4, 0, Math.PI * 2); ctx.fill();
   ctx.shadowBlur = 0;
   ctx.restore();
 
-  // sword (right) — swings on attackTimer
+  // sword
   const swing = e.attackTimer > 0 ? Math.sin((0.45 - e.attackTimer) * 12) * 1.4 : Math.sin(t * 2) * 0.2;
   ctx.save();
-  ctx.translate(22, 6 + bob);
-  ctx.rotate(swing);
+  ctx.translate(26, 8 + bob); ctx.rotate(swing);
   ctx.fillStyle = "#222"; ctx.fillRect(-2, -1, 6, 2);
   ctx.fillStyle = "#ff00cc"; ctx.fillRect(4, -4, 3, 8);
-  const blade = ctx.createLinearGradient(7, 0, 38, 0);
-  blade.addColorStop(0, "#fff");
-  blade.addColorStop(1, "#ff44dd");
+  const blade = ctx.createLinearGradient(7, 0, 42, 0);
+  blade.addColorStop(0, "#fff"); blade.addColorStop(1, "#ff44dd");
   ctx.fillStyle = blade;
-  ctx.shadowColor = "#ff00cc"; ctx.shadowBlur = 14;
+  ctx.shadowColor = "#ff00cc"; ctx.shadowBlur = 16;
   ctx.beginPath();
-  ctx.moveTo(7, -2); ctx.lineTo(38, -0.5); ctx.lineTo(40, 0); ctx.lineTo(38, 0.5); ctx.lineTo(7, 2);
+  ctx.moveTo(7, -2.5); ctx.lineTo(42, -0.6); ctx.lineTo(44, 0); ctx.lineTo(42, 0.6); ctx.lineTo(7, 2.5);
   ctx.closePath(); ctx.fill();
   ctx.shadowBlur = 0;
   ctx.restore();
 
-  // helmet (gladiator crested)
+  // helmet
   ctx.save();
-  ctx.translate(0, -16 + bob);
-  ctx.fillStyle = flash ? "#fff" : "#1a0010";
+  ctx.translate(0, -18 + bob);
+  ctx.fillStyle = flash ? "#fff" : (phase2 ? "#3a0024" : "#1a0010");
   ctx.strokeStyle = "#ff00cc";
-  ctx.shadowColor = "#ff00cc";
-  ctx.shadowBlur = 12;
-  ctx.lineWidth = 2;
+  ctx.shadowColor = "#ff00cc"; ctx.shadowBlur = 14; ctx.lineWidth = 2;
   ctx.beginPath();
-  ctx.moveTo(-10, 6);
-  ctx.quadraticCurveTo(-12, -8, 0, -10);
-  ctx.quadraticCurveTo(12, -8, 10, 6);
+  ctx.moveTo(-12, 8);
+  ctx.quadraticCurveTo(-14, -10, 0, -12);
+  ctx.quadraticCurveTo(14, -10, 12, 8);
   ctx.closePath(); ctx.fill(); ctx.stroke();
-  // visor with two eyes
-  ctx.fillStyle = "#ff44dd";
-  ctx.shadowColor = "#ff44dd"; ctx.shadowBlur = 10;
-  ctx.fillRect(-7, -2, 5, 2.2);
-  ctx.fillRect(2, -2, 5, 2.2);
+  ctx.fillStyle = phase2 ? "#ff66ff" : "#ff44dd";
+  ctx.shadowColor = "#ff44dd"; ctx.shadowBlur = 12;
+  ctx.fillRect(-8, -3, 6, 2.5);
+  ctx.fillRect(2, -3, 6, 2.5);
   ctx.shadowBlur = 0;
-  // crest (mohawk) flowing
+  // crest
   ctx.fillStyle = "#ff00cc";
-  ctx.shadowColor = "#ff00cc"; ctx.shadowBlur = 14;
+  ctx.shadowColor = "#ff00cc"; ctx.shadowBlur = 16;
   ctx.beginPath();
-  ctx.moveTo(0, -10);
-  ctx.lineTo(-2, -22 + Math.sin(t * 6) * 2);
-  ctx.lineTo(2, -22 + Math.sin(t * 6 + 1) * 2);
+  ctx.moveTo(0, -12);
+  ctx.lineTo(-2, -26 + Math.sin(t * 6) * 2);
+  ctx.lineTo(2, -26 + Math.sin(t * 6 + 1) * 2);
   ctx.closePath(); ctx.fill();
-  // crest tail
   ctx.beginPath();
-  ctx.moveTo(-1, -8);
-  ctx.quadraticCurveTo(-10 + Math.sin(t * 4) * 3, 4, -8 + Math.sin(t * 4) * 3, 14);
-  ctx.lineTo(-4, 14);
-  ctx.quadraticCurveTo(-2, 4, 1, -8);
+  ctx.moveTo(-1, -10);
+  ctx.quadraticCurveTo(-12 + Math.sin(t * 4) * 3, 6, -10 + Math.sin(t * 4) * 3, 16);
+  ctx.lineTo(-5, 16);
+  ctx.quadraticCurveTo(-2, 6, 1, -10);
   ctx.closePath(); ctx.fill();
   ctx.shadowBlur = 0;
   ctx.restore();
 
   ctx.restore();
 
-  // hp bar floating above (in world)
+  // floating hp bar (world space)
   ctx.save();
-  ctx.translate(e.pos.x, e.pos.y - 56);
-  ctx.fillStyle = "#222"; ctx.fillRect(-50, 0, 100, 6);
-  ctx.fillStyle = "#ff00cc"; ctx.fillRect(-50, 0, 100 * (e.hp / e.maxHp), 6);
-  ctx.strokeStyle = "#ff44dd"; ctx.lineWidth = 1; ctx.strokeRect(-50, 0, 100, 6);
+  ctx.translate(e.pos.x, e.pos.y - 80);
+  // outer chrome
+  ctx.fillStyle = "rgba(0,0,0,0.7)";
+  ctx.fillRect(-80, -4, 160, 16);
+  ctx.strokeStyle = "#ff44dd";
+  ctx.lineWidth = 1; ctx.strokeRect(-80, -4, 160, 16);
+  ctx.fillStyle = "#1a0010";
+  ctx.fillRect(-76, 0, 152, 8);
+  // hp
+  const ratio = Math.max(0, e.hp / e.maxHp);
+  const halfMark = -76 + 76; // mid
+  const fillColor = phase2 ? "#ff00ff" : "#ff00cc";
+  ctx.fillStyle = fillColor;
+  ctx.fillRect(-76, 0, 152 * ratio, 8);
+  // 50% phase line
+  ctx.strokeStyle = "#ffcc00"; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(halfMark, -4); ctx.lineTo(halfMark, 12); ctx.stroke();
+  // labels
+  ctx.fillStyle = "#ff66ee";
+  ctx.font = "bold 10px monospace"; ctx.textAlign = "center";
+  ctx.fillText("THE WARDEN — " + (phase2 ? "PHASE II" : "PHASE I"), 0, -8);
   ctx.restore();
 }
