@@ -5,7 +5,9 @@ export type Hazard =
   | { kind: "conveyor"; x: number; y: number; w: number; h: number; vx: number; vy: number }
   | { kind: "phase"; x: number; y: number; w: number; h: number; phase: number; period: number }
   | { kind: "stun_pylon"; x: number; y: number; r: number; cooldown: number; charge: number }
-  | { kind: "anti_dash"; x: number; y: number; r: number };
+  | { kind: "anti_dash"; x: number; y: number; r: number }
+  | { kind: "spike"; x: number; y: number; w: number; h: number; phase: number; period: number; armed: boolean }
+  | { kind: "shock"; x: number; y: number; w: number; h: number; phase: number };
 
 export type Wall = {
   x: number; y: number; w: number; h: number;
@@ -35,6 +37,9 @@ export type Enemy = {
   dashCd: number;
   dashTime: number;
   shieldActive: boolean;        // shield class: deployed
+  detectRange: number;          // base sight radius in world px
+  aggroTimer: number;           // seconds of memory after losing LOS
+  hasLOS: boolean;              // cached this frame
   isBoss?: boolean;
   // boss
   bossPhase?: 1 | 2;
@@ -95,17 +100,20 @@ export type Pickup = {
 export type Difficulty = "easy" | "medium" | "hard" | "nightmare";
 
 export const DIFFICULTY_PRESETS: Record<Difficulty, {
-  countMul: number; dmgMul: number; hpMul: number; label: string; color: string;
+  countMul: number; dmgMul: number; hpMul: number; atkMul: number; moveMul: number; detectMul: number;
+  groupBase: number; label: string; color: string;
 }> = {
-  easy:      { countMul: 0.7, dmgMul: 0.55, hpMul: 0.7, label: "EASY",      color: "#00ffaa" },
-  medium:    { countMul: 1.0, dmgMul: 1.0,  hpMul: 1.0, label: "MEDIUM",    color: "#00f0ff" },
-  hard:      { countMul: 1.4, dmgMul: 1.6,  hpMul: 1.6, label: "HARD",      color: "#ffcc00" },
-  nightmare: { countMul: 1.9, dmgMul: 2.4,  hpMul: 2.4, label: "NIGHTMARE", color: "#ff3b64" },
+  easy:      { countMul: 0.7, dmgMul: 0.55, hpMul: 0.7, atkMul: 0.8,  moveMul: 0.9,  detectMul: 0.85, groupBase: 6,  label: "EASY",      color: "#00ffaa" },
+  medium:    { countMul: 1.0, dmgMul: 1.0,  hpMul: 1.0, atkMul: 1.0,  moveMul: 1.0,  detectMul: 1.0,  groupBase: 8,  label: "MEDIUM",    color: "#00f0ff" },
+  hard:      { countMul: 1.4, dmgMul: 1.6,  hpMul: 1.6, atkMul: 1.25, moveMul: 1.1,  detectMul: 1.15, groupBase: 11, label: "HARD",      color: "#ffcc00" },
+  nightmare: { countMul: 1.9, dmgMul: 2.4,  hpMul: 2.4, atkMul: 1.55, moveMul: 1.25, detectMul: 1.35, groupBase: 14, label: "NIGHTMARE", color: "#ff3b64" },
 };
 
 export const LEVEL_TIME_LIMITS: Record<number, number> = {
-  1: 180,
-  2: 210,
-  3: 240,
-  4: 270,
+  1: 120,
+  2: 150,
+  3: 180,
+  4: 210,
 };
+
+export const SNIPER_MAX_ALIVE = 4;
