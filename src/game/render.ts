@@ -184,6 +184,53 @@ function drawHazards(ctx: CanvasRenderingContext2D, g: GameEngine) {
       ctx.lineWidth = 2;
       ctx.beginPath(); ctx.arc(h.x, h.y, h.r, 0, Math.PI * 2); ctx.stroke();
       ctx.setLineDash([]);
+    } else if (h.kind === "spike") {
+      const armed = h.armed;
+      ctx.fillStyle = armed ? "rgba(255,60,80,0.35)" : "rgba(255,180,60,0.12)";
+      ctx.fillRect(h.x, h.y, h.w, h.h);
+      ctx.strokeStyle = armed ? "#ff3b64" : "rgba(255,180,60,0.6)";
+      ctx.lineWidth = 2;
+      ctx.shadowColor = armed ? "#ff3b64" : "#ffaa44";
+      ctx.shadowBlur = armed ? 14 : 4;
+      ctx.strokeRect(h.x + 1, h.y + 1, h.w - 2, h.h - 2);
+      ctx.shadowBlur = 0;
+      if (armed) {
+        ctx.fillStyle = "#ff3b64";
+        const cx = h.x + h.w / 2, cy = h.y + h.h / 2;
+        for (let k = 0; k < 4; k++) {
+          const a = (k / 4) * Math.PI * 2 + Math.PI / 4;
+          ctx.beginPath();
+          ctx.moveTo(cx + Math.cos(a) * 6, cy + Math.sin(a) * 6);
+          ctx.lineTo(cx + Math.cos(a) * 20, cy + Math.sin(a) * 20);
+          ctx.lineTo(cx + Math.cos(a + 0.3) * 14, cy + Math.sin(a + 0.3) * 14);
+          ctx.closePath(); ctx.fill();
+        }
+      } else {
+        ctx.fillStyle = "rgba(255,180,60,0.5)";
+        ctx.font = "9px monospace"; ctx.textAlign = "center";
+        ctx.fillText("⚠ PLATE", h.x + h.w / 2, h.y + h.h / 2 + 3);
+      }
+    } else if (h.kind === "shock") {
+      const on = Math.sin(h.phase * 3) > 0.4;
+      ctx.fillStyle = on ? "rgba(120,200,255,0.35)" : "rgba(120,200,255,0.08)";
+      ctx.fillRect(h.x, h.y, h.w, h.h);
+      ctx.strokeStyle = on ? "#88ddff" : "rgba(120,200,255,0.4)";
+      ctx.shadowColor = "#88ddff"; ctx.shadowBlur = on ? 14 : 2;
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(h.x + 0.5, h.y + 0.5, h.w - 1, h.h - 1);
+      ctx.shadowBlur = 0;
+      if (on) {
+        ctx.strokeStyle = "#cceeff"; ctx.lineWidth = 1;
+        for (let k = 0; k < 4; k++) {
+          ctx.beginPath();
+          const x1 = h.x + Math.random() * h.w;
+          const x2 = h.x + Math.random() * h.w;
+          ctx.moveTo(x1, h.y);
+          ctx.lineTo(h.x + h.w / 2 + (Math.random() - 0.5) * 20, h.y + h.h / 2);
+          ctx.lineTo(x2, h.y + h.h);
+          ctx.stroke();
+        }
+      }
     }
   }
 }
