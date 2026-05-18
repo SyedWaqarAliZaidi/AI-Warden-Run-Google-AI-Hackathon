@@ -372,6 +372,39 @@ export class GameEngine {
 
   private spawnHazards(cfg: LevelConfig) {
     const cy = this.worldH / 2;
+    // Always add a baseline set of traps to every non-boss level.
+    if (this.level !== 4) {
+      // pressure-plate spikes scattered
+      const trapCount = 4 + this.level * 2;
+      for (let i = 0; i < trapCount; i++) {
+        const x = 400 + Math.random() * (this.worldW - 800);
+        const y = 250 + Math.random() * (this.worldH - 500);
+        this.hazards.push({
+          kind: "spike", x, y, w: 80, h: 80,
+          phase: Math.random() * 2, period: 2.2 + Math.random() * 0.8, armed: false,
+        });
+      }
+      // electrified floor tiles
+      const shockCount = 2 + this.level;
+      for (let i = 0; i < shockCount; i++) {
+        const x = 500 + Math.random() * (this.worldW - 1000);
+        const y = 250 + Math.random() * (this.worldH - 500);
+        this.hazards.push({ kind: "shock", x, y, w: 120, h: 120, phase: Math.random() * 4 });
+      }
+      // parkour: phase platforms on L2, L3
+      if (this.level === 2 || this.level === 3) {
+        const n = this.level === 3 ? 6 : 4;
+        for (let i = 0; i < n; i++) {
+          this.hazards.push({
+            kind: "phase",
+            x: 600 + i * 460,
+            y: 360 + (i % 2) * 460,
+            w: 120, h: 120,
+            phase: i * 0.5, period: 2.4,
+          });
+        }
+      }
+    }
     for (const h of cfg.hazards) {
       if (h === "laser") {
         for (let i = 0; i < 3; i++) {
@@ -418,6 +451,32 @@ export class GameEngine {
           });
         }
       }
+    }
+  }
+
+  // Raycast: returns number of wall AABBs the segment from a→b passes through.
+  private wallsHitOnSegment(a: Vec, b: Vec): number {
+    let count = 0;
+    const dx = b.x - a.x, dy = b.y - a.y;
+    for (const w of this.walls) {
+      if (segmentIntersectsRect(a.x, a.y, dx, dy, w.x, w.y, w.w, w.h)) count++;
+    }
+    return count;
+  }
+
+  private updateDetection(e: Enemy, dt: number) {
+    const dx = this.player.pos.x - e.pos.x;
+    const dy = this.player.pos.y - e.pos.y;
+    const d = Math.hypot(dx, dy);
+    e.aggroTimer = Math.max(0, e.aggroTimer - dt);
+    if (d > e.detectRange) { e.hasLOS = false; return; }
+    const walls = this.wallsHitOnSegment(e.pos, this.player.pos);
+    const allowed = e.cls === "sniper" ? 2 : 0;
+    if (walls <= allowed) {
+      e.hasLOS = true;
+      e.aggroTimer = 3.0;
+    } else {
+      e.hasLOS = false;
     }
   }
 
@@ -699,11 +758,23 @@ export class GameEngine {
       e.dashTime = Math.max(0, e.dashTime - dt);
       if (e.isBoss) { this.updateBoss(e, dt); continue; }
 
+      this.updateDetection(e, dt);
+      const engaged = e.hasLOS || e.aggroTimer > 0;
+
       const dx = this.player.pos.x - e.pos.x;
       const dy = this.player.pos.y - e.pos.y;
       const d = Math.hypot(dx, dy) || 1;
       const dirToPlayer = { x: dx / d, y: dy / d };
-      e.facing = dirToPlayer;
+      if (engaged) e.facing = dirToPlayer;
+
+      if (!engaged) {
+        // idle wander: slow drift, friction
+        e.vel.x = lerp(e.vel.x, 0, dt * 4);
+        e.vel.y = lerp(e.vel.y, 0, dt * 4);
+        e.anim = "idle";
+        this.moveWithWalls(e.pos, { ...e.vel }, e.radius, dt);
+        continue;
+      }
 
       switch (e.cls) {
         case "drone": {
@@ -723,10 +794,12 @@ export class GameEngine {
           e.vel.y = lerp(e.vel.y, tvy, dt * 3);
           if (d < 70) {
             // dagger melee
-            if (e.attackTimer === 0) e.attackTimer = 0.4;
-          } else if (d < 520 && e.shootCd === 0) {
+            if (e.attackTimer === 0) { e.attackTimer = 0.4; audio.play("enemySlash"); }
+          } else if (d < 520 && e.shootCd === 0 && e.hasLOS) {
             this.enemyShoot(e, dirToPlayer, 320, 1);
-            e.shootCd = 1.4 + Math.random() * 0.4;
+            const presets = DIFFICULTY_PRESETS[this.difficulty];
+            e.shootCd = (1.2 + Math.random() * 0.4) / presets.atkMul;
+            audio.play("enemyShoot");
           }
           break;
         }
@@ -738,10 +811,12 @@ export class GameEngine {
           const tvy = dirToPlayer.y * e.speed * drive;
           e.vel.x = lerp(e.vel.x, tvx, dt * 3);
           e.vel.y = lerp(e.vel.y, tvy, dt * 3);
-          if (d > 420 && e.shootCd === 0) {
+          if (d > 420 && e.shootCd === 0 && e.hasLOS) {
+            audio.play("sniperCharge");
             // charged predictive shot
             this.enemyShoot(e, normalize(predictAim(e.pos, this.player.pos, this.player.vel, 460)), 460, 2, true);
-            e.shootCd = 2.6;
+            const presets = DIFFICULTY_PRESETS[this.difficulty];
+            e.shootCd = 2.4 / presets.atkMul;
           }
           break;
         }
@@ -755,7 +830,9 @@ export class GameEngine {
           e.vel.y = lerp(e.vel.y, tvy, dt * 6);
           if (e.dashCd === 0 && d > 80 && d < 360) {
             e.dashTime = 0.32;
-            e.dashCd = 3.0;
+            const presets = DIFFICULTY_PRESETS[this.difficulty];
+            e.dashCd = 3.0 / presets.atkMul;
+            audio.play("dash");
             for (let i = 0; i < 8; i++) {
               this.particles.push({
                 pos: { ...e.pos }, vel: { x: -dirToPlayer.x * 60 + (Math.random() - 0.5) * 30, y: -dirToPlayer.y * 60 + (Math.random() - 0.5) * 30 },
@@ -763,13 +840,14 @@ export class GameEngine {
               });
             }
           }
-          if (d < 50) { if (e.attackTimer === 0) e.attackTimer = 0.3; }
+          if (d < 50) { if (e.attackTimer === 0) { e.attackTimer = 0.3; audio.play("enemySlash"); } }
           break;
         }
         case "shield": {
           if (!e.shieldActive && e.hp / e.maxHp < 0.5) {
             e.shieldActive = true;
             this.spawnExplosion(e.pos.x, e.pos.y, "#88ddff", 14);
+            audio.play("shieldUp");
           }
           if (e.shieldActive) {
             // find nearest sniper to escort: move slowly to it, then anchor; can't move when next to sniper
