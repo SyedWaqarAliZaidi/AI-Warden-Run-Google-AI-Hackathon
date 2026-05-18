@@ -3,6 +3,7 @@ import { useServerFn } from "@tanstack/react-start";
 import { GameEngine, VIEW_W, VIEW_H, type GameEvent } from "@/game/engine";
 import { render } from "@/game/render";
 import { DIFFICULTY_PRESETS, LEVEL_TIME_LIMITS, type Difficulty } from "@/game/types";
+import { audio } from "@/lib/audio";
 import {
   requestWardenConfig,
   validateRun,
@@ -186,6 +187,7 @@ export function WardenGame() {
   };
 
   const begin = () => {
+    audio.ensure(); audio.resume(); audio.play("menu");
     setTrace([]);
     setLastMetrics(null);
     setRefereeMsg(null);
