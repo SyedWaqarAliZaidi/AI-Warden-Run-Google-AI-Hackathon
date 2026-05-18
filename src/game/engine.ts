@@ -1231,3 +1231,19 @@ function predictAim(from: Vec, target: Vec, targetVel: Vec, bulletSpeed: number)
   const py = target.y + targetVel.y * t - from.y;
   return { x: px, y: py };
 }
+
+// AABB-line intersection: segment (ax,ay)+(dx,dy)*t for t in [0,1] vs rect (rx,ry,rw,rh).
+function segmentIntersectsRect(ax: number, ay: number, dx: number, dy: number, rx: number, ry: number, rw: number, rh: number): boolean {
+  let tmin = 0, tmax = 1;
+  const p = [-dx, dx, -dy, dy];
+  const q = [ax - rx, rx + rw - ax, ay - ry, ry + rh - ay];
+  for (let i = 0; i < 4; i++) {
+    if (p[i] === 0) { if (q[i] < 0) return false; }
+    else {
+      const t = q[i] / p[i];
+      if (p[i] < 0) { if (t > tmax) return false; if (t > tmin) tmin = t; }
+      else { if (t < tmin) return false; if (t < tmax) tmax = t; }
+    }
+  }
+  return true;
+}
