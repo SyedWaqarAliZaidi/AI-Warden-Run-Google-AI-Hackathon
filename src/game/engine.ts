@@ -1,8 +1,9 @@
 import type {
   Bullet, Enemy, EnemyClass, Hazard, Particle, Pickup, Player, Vec, Wall, AnimState, Difficulty,
 } from "./types";
-import { DIFFICULTY_PRESETS, LEVEL_TIME_LIMITS } from "./types";
+import { DIFFICULTY_PRESETS, LEVEL_TIME_LIMITS, SNIPER_MAX_ALIVE } from "./types";
 import type { LevelConfig, PlayerMetrics } from "@/lib/warden.functions";
+import { audio } from "@/lib/audio";
 
 export const VIEW_W = 900;
 export const VIEW_H = 600;
@@ -33,20 +34,30 @@ export type GameEvent =
   | { type: "warden_taunt"; msg: string };
 
 const WORLD_SIZES: Record<number, { w: number; h: number }> = {
-  1: { w: 2400, h: 1600 },
-  2: { w: 2800, h: 1900 },
-  3: { w: 3200, h: 2200 },
-  4: { w: 2400, h: 1800 },
+  1: { w: 3200, h: 2100 },
+  2: { w: 3800, h: 2500 },
+  3: { w: 4200, h: 2800 },
+  4: { w: 3000, h: 2200 },
 };
 
-// per-class speed multiplier applied on top of base enemy speed
-const CLASS_SPEED_MUL: Record<EnemyClass, number> = {
-  drone: 0.85,
-  shooter: 0.8,
-  sniper: 0.55,
-  slasher: 1.25,
-  shield: 0.55,
-  boss: 0.7,
+// absolute base speed in px/s for each class (player baseline is 195)
+const CLASS_BASE_SPEED: Record<EnemyClass, number> = {
+  drone: 150,
+  shooter: 205,       // slightly faster than player
+  sniper: 110,        // slow
+  slasher: 220,       // faster than player
+  shield: 165,        // faster than before
+  boss: 130,
+};
+
+// base detection radius (px) — sniper highest, slasher lowest
+const CLASS_DETECT: Record<EnemyClass, number> = {
+  drone: 360,
+  shooter: 520,
+  sniper: 900,
+  slasher: 300,
+  shield: 380,
+  boss: 9999,
 };
 
 // per-class hp multiplier
@@ -60,13 +71,40 @@ const CLASS_HP_MUL: Record<EnemyClass, number> = {
 };
 
 const CLASS_RADIUS: Record<EnemyClass, number> = {
-  drone: 18,
-  shooter: 20,
-  sniper: 19,
-  slasher: 20,
-  shield: 26,
-  boss: 60,
+  drone: 20,
+  shooter: 22,
+  sniper: 22,
+  slasher: 22,
+  shield: 30,
+  boss: 80,
 };
+
+// group composition weights (Slasher 30-45, Shooter 20-35, Shield 15-25, Sniper 10-20)
+function rollGroup(size: number, rng: () => number): EnemyClass[] {
+  const out: EnemyClass[] = [];
+  // pick a roll for this group within ranges
+  const slasherPct = 0.30 + rng() * 0.15;
+  const shooterPct = 0.20 + rng() * 0.15;
+  const shieldPct  = 0.15 + rng() * 0.10;
+  // sniper takes the rest, clamp to [0.10, 0.20]
+  let sniperPct = 1 - slasherPct - shooterPct - shieldPct;
+  sniperPct = Math.max(0.10, Math.min(0.20, sniperPct));
+  const total = slasherPct + shooterPct + shieldPct + sniperPct;
+  const ns = Math.round((slasherPct / total) * size);
+  const nS = Math.round((shooterPct / total) * size);
+  const nh = Math.round((shieldPct / total) * size);
+  const nn = Math.max(0, size - ns - nS - nh);
+  for (let i = 0; i < ns; i++) out.push("slasher");
+  for (let i = 0; i < nS; i++) out.push("shooter");
+  for (let i = 0; i < nh; i++) out.push("shield");
+  for (let i = 0; i < nn; i++) out.push("sniper");
+  // shuffle
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
 
 export class GameEngine {
   player!: Player;
@@ -181,55 +219,65 @@ export class GameEngine {
   }
 
   private buildWalls() {
-    const t = 32;
+    const t = 56; // thick walls
     this.walls.push({ x: 0, y: 0, w: this.worldW, h: t, kind: "wall" });
     this.walls.push({ x: 0, y: this.worldH - t, w: this.worldW, h: t, kind: "wall" });
     this.walls.push({ x: 0, y: 0, w: t, h: this.worldH, kind: "wall" });
     this.walls.push({ x: this.worldW - t, y: 0, w: t, h: this.worldH, kind: "wall" });
 
-    const cx = this.worldW / 2;
     const cy = this.worldH / 2;
     if (this.level === 1) {
-      // two vestibule walls with a passage
-      this.walls.push({ x: 700, y: 0, w: t, h: cy - 140, kind: "wall" });
-      this.walls.push({ x: 700, y: cy + 140, w: t, h: this.worldH - (cy + 140), kind: "wall" });
-      this.walls.push({ x: 1500, y: 250, w: t, h: this.worldH - 500, kind: "wall" });
+      // rooms + hallways layout
+      this.walls.push({ x: 800, y: 0, w: t, h: cy - 200, kind: "wall" });
+      this.walls.push({ x: 800, y: cy + 200, w: t, h: this.worldH - (cy + 200), kind: "wall" });
+      this.walls.push({ x: 1600, y: 300, w: t, h: this.worldH - 600, kind: "wall" });
+      this.walls.push({ x: 2200, y: 0, w: t, h: cy - 280, kind: "wall" });
+      this.walls.push({ x: 2200, y: cy + 280, w: t, h: this.worldH - (cy + 280), kind: "wall" });
+      // pillar rooms
+      this.walls.push({ x: 1050, y: 380, w: 280, h: t, kind: "wall" });
+      this.walls.push({ x: 1050, y: this.worldH - 380 - t, w: 280, h: t, kind: "wall" });
+      this.walls.push({ x: 1750, y: 500, w: 200, h: t, kind: "wall" });
+      this.walls.push({ x: 1750, y: this.worldH - 500 - t, w: 200, h: t, kind: "wall" });
     } else if (this.level === 2) {
-      for (let i = 0; i < 5; i++) {
+      // grid of pillars + parkour corridors
+      for (let i = 0; i < 6; i++) {
         for (let j = 0; j < 4; j++) {
-          this.walls.push({ x: 380 + i * 420, y: 280 + j * 350, w: 100, h: 100, kind: "wall" });
+          this.walls.push({ x: 480 + i * 520, y: 380 + j * 480, w: 140, h: 140, kind: "wall" });
         }
       }
-      this.walls.push({ x: cx - t / 2, y: 0, w: t, h: cy - 200, kind: "wall" });
-      this.walls.push({ x: cx - t / 2, y: cy + 200, w: t, h: this.worldH - (cy + 200), kind: "wall" });
+      // long divider with parkour gap
+      const cx2 = this.worldW / 2;
+      this.walls.push({ x: cx2 - t / 2, y: 0, w: t, h: cy - 280, kind: "wall" });
+      this.walls.push({ x: cx2 - t / 2, y: cy + 280, w: t, h: this.worldH - (cy + 280), kind: "wall" });
     } else if (this.level === 3) {
-      // labyrinth: many corridors
-      this.walls.push({ x: 500, y: 200, w: t, h: 900, kind: "wall" });
-      this.walls.push({ x: 900, y: 100, w: t, h: 700, kind: "wall" });
-      this.walls.push({ x: 900, y: 900, w: t, h: 700, kind: "wall" });
-      this.walls.push({ x: 1400, y: 300, w: t, h: 1200, kind: "wall" });
-      this.walls.push({ x: 1900, y: 100, w: t, h: 900, kind: "wall" });
-      this.walls.push({ x: 1900, y: 1200, w: t, h: 700, kind: "wall" });
-      this.walls.push({ x: 2400, y: 300, w: t, h: 900, kind: "wall" });
-      this.walls.push({ x: 2400, y: 1400, w: t, h: 500, kind: "wall" });
-      // horizontal barriers
-      this.walls.push({ x: 600, y: 1100, w: 300, h: t, kind: "wall" });
-      this.walls.push({ x: 1500, y: 600, w: 380, h: t, kind: "wall" });
-      this.walls.push({ x: 2000, y: 1100, w: 380, h: t, kind: "wall" });
+      // labyrinth: rooms connected by hallways
+      const verticals = [600, 1100, 1700, 2300, 2900, 3500];
+      for (const vx of verticals) {
+        const gapY = 400 + Math.random() * 1400;
+        this.walls.push({ x: vx, y: 200, w: t, h: gapY - 200, kind: "wall" });
+        this.walls.push({ x: vx, y: gapY + 280, w: t, h: this.worldH - (gapY + 280) - 200, kind: "wall" });
+      }
+      // horizontal cross-walls
+      this.walls.push({ x: 700, y: 1100, w: 380, h: t, kind: "wall" });
+      this.walls.push({ x: 1700, y: 700, w: 480, h: t, kind: "wall" });
+      this.walls.push({ x: 2400, y: 1400, w: 480, h: t, kind: "wall" });
+      this.walls.push({ x: 3000, y: 900, w: 380, h: t, kind: "wall" });
     } else if (this.level === 4) {
-      // boss colosseum: ring of large pillars + corridor to heal pickup
-      const ringR = 540;
+      // boss colosseum
+      const cx = this.worldW / 2;
+      const cy2 = this.worldH / 2;
+      const ringR = 620;
       for (let k = 0; k < 8; k++) {
         const a = (k / 8) * Math.PI * 2;
         this.walls.push({
           x: cx + Math.cos(a) * ringR - 40,
-          y: cy + Math.sin(a) * ringR - 40,
-          w: 80, h: 80, kind: "wall",
+          y: cy2 + Math.sin(a) * ringR - 40,
+          w: 100, h: 100, kind: "wall",
         });
       }
       // partition guarding the heal pickup corridor
-      this.walls.push({ x: 380, y: this.worldH - 360, w: t, h: 280, kind: "wall" });
-      this.walls.push({ x: 80, y: this.worldH - 360, w: 330, h: t, kind: "wall" });
+      this.walls.push({ x: 420, y: this.worldH - 420, w: t, h: 320, kind: "wall" });
+      this.walls.push({ x: 80, y: this.worldH - 420, w: 380, h: t, kind: "wall" });
     }
   }
 
@@ -240,41 +288,38 @@ export class GameEngine {
       this.enemies.push(this.makeEnemy("boss", { x: cx, y: cy - 180 }, cfg));
       return;
     }
-    // determine composition by level
-    let comp: EnemyClass[] = [];
-    if (this.level === 1) {
-      comp = ["drone", "drone", "drone", "drone", "drone", "shooter"];
-    } else if (this.level === 2) {
-      comp = ["drone", "drone", "shooter", "shooter", "shooter", "slasher", "sniper"];
-    } else if (this.level === 3) {
-      comp = ["shooter", "shooter", "sniper", "sniper", "slasher", "slasher", "shield", "shield"];
-    }
+    // Group-based spawning. Each group spawns clustered in a different region of the map.
     const presets = DIFFICULTY_PRESETS[this.difficulty];
-    const total = Math.max(3, Math.round(comp.length * presets.countMul * (0.85 + cfg.enemyCount / 12)));
-    // extend by repeating composition pattern
-    const expanded: EnemyClass[] = [];
-    for (let i = 0; i < total; i++) expanded.push(comp[i % comp.length]);
-
-    for (let i = 0; i < expanded.length; i++) {
-      const cls = expanded[i];
-      const a = (i / expanded.length) * Math.PI * 2;
-      const ring = 380 + (i % 3) * 120;
-      let pos: Vec = {
-        x: cx + Math.cos(a) * ring + (Math.random() - 0.5) * 120,
-        y: cy + Math.sin(a) * ring + (Math.random() - 0.5) * 120,
-      };
-      pos.x = Math.max(80, Math.min(this.worldW - 80, pos.x));
-      pos.y = Math.max(80, Math.min(this.worldH - 80, pos.y));
-      pos = this.nudgeOutOfWalls(pos, 24);
-      this.enemies.push(this.makeEnemy(cls, pos, cfg));
+    const baseSize = presets.groupBase + (this.level - 1); // L1 easy=6, L1 nightmare=14
+    const groupCount = this.level === 1 ? 2 : this.level === 2 ? 3 : 4;
+    let sniperAlive = 0;
+    for (let gi = 0; gi < groupCount; gi++) {
+      const group = rollGroup(baseSize, Math.random);
+      // anchor point spread across map
+      const ax = 600 + ((gi + 1) / (groupCount + 1)) * (this.worldW - 1200);
+      const ay = 300 + Math.random() * (this.worldH - 600);
+      for (let i = 0; i < group.length; i++) {
+        let cls = group[i];
+        if (cls === "sniper" && sniperAlive >= SNIPER_MAX_ALIVE) cls = "shooter";
+        if (cls === "sniper") sniperAlive++;
+        const a = Math.random() * Math.PI * 2;
+        const r = 30 + Math.random() * 140;
+        let pos: Vec = {
+          x: Math.max(120, Math.min(this.worldW - 120, ax + Math.cos(a) * r)),
+          y: Math.max(120, Math.min(this.worldH - 120, ay + Math.sin(a) * r)),
+        };
+        pos = this.nudgeOutOfWalls(pos, 28);
+        this.enemies.push(this.makeEnemy(cls, pos, cfg));
+      }
     }
   }
 
   private makeEnemy(cls: EnemyClass, pos: Vec, cfg: LevelConfig): Enemy {
     const presets = DIFFICULTY_PRESETS[this.difficulty];
-    const baseHp = cls === "boss" ? 220 : (cfg.enemyHp * 2 + 2);
+    const baseHp = cls === "boss" ? 260 : (cfg.enemyHp * 2 + 2);
     const hp = Math.max(1, Math.round(baseHp * CLASS_HP_MUL[cls] * presets.hpMul));
-    const speed = cfg.enemySpeed * CLASS_SPEED_MUL[cls];
+    const speed = CLASS_BASE_SPEED[cls] * presets.moveMul;
+    const detectRange = CLASS_DETECT[cls] * presets.detectMul;
     return {
       id: this.nextId++,
       cls,
@@ -292,6 +337,9 @@ export class GameEngine {
       dashCd: cls === "slasher" ? 1 + Math.random() * 2 : 0,
       dashTime: 0,
       shieldActive: false,
+      detectRange,
+      aggroTimer: 0,
+      hasLOS: false,
       isBoss: cls === "boss",
       bossPhase: cls === "boss" ? 1 : undefined,
       stunCd: cls === "boss" ? 18 : undefined,
