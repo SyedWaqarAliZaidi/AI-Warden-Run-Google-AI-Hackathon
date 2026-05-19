@@ -1295,6 +1295,29 @@ function normalize(v: Vec): Vec { const l = Math.hypot(v.x, v.y) || 1; return { 
 function pointInRect(p: Vec, r: { x: number; y: number; w: number; h: number }) {
   return p.x > r.x && p.x < r.x + r.w && p.y > r.y && p.y < r.y + r.h;
 }
+function clamp(v: number, lo: number, hi: number) { return Math.max(lo, Math.min(hi, v)); }
+
+function rollGroupWeighted(
+  size: number,
+  w: { slasher: number; shooter: number; shield: number; sniper: number },
+  rng: () => number,
+): EnemyClass[] {
+  const total = w.slasher + w.shooter + w.shield + w.sniper || 1;
+  const ns = Math.round((w.slasher / total) * size);
+  const nS = Math.round((w.shooter / total) * size);
+  const nh = Math.round((w.shield  / total) * size);
+  const nn = Math.max(0, size - ns - nS - nh);
+  const out: EnemyClass[] = [];
+  for (let i = 0; i < ns; i++) out.push("slasher");
+  for (let i = 0; i < nS; i++) out.push("shooter");
+  for (let i = 0; i < nh; i++) out.push("shield");
+  for (let i = 0; i < nn; i++) out.push("sniper");
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
 function predictAim(from: Vec, target: Vec, targetVel: Vec, bulletSpeed: number): Vec {
   const dx = target.x - from.x;
   const dy = target.y - from.y;
