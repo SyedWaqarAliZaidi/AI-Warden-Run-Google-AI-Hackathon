@@ -314,13 +314,28 @@ export class GameEngine {
       this.enemies.push(this.makeEnemy("boss", { x: cx, y: cy - 180 }, cfg));
       return;
     }
-    // Group-based spawning. Each group spawns clustered in a different region of the map.
     const presets = DIFFICULTY_PRESETS[this.difficulty];
-    const baseSize = presets.groupBase + (this.level - 1); // L1 easy=6, L1 nightmare=14
-    const groupCount = this.level === 1 ? 2 : this.level === 2 ? 3 : 4;
+    // Prefer AI-orchestrated group plan when present.
+    const aiPlan = cfg.groupPlan;
+    const baseSize = presets.groupBase + (this.level - 1);
+    const groupCount = aiPlan?.groupCount ?? (this.level === 1 ? 2 : this.level === 2 ? 3 : 4);
+    const groupSizes: number[] = Array.from({ length: groupCount }, (_, i) =>
+      aiPlan?.groupSizes?.[i] ?? baseSize,
+    );
+    // Build a normalized weight pool from AI (clamped to allowed ranges).
+    const w = aiPlan?.weights ?? null;
+    const clampedW = w ? {
+      slasher: clamp(w.slasher, 0.30, 0.45),
+      shooter: clamp(w.shooter, 0.20, 0.35),
+      shield:  clamp(w.shield,  0.15, 0.25),
+      sniper:  clamp(w.sniper,  0.10, 0.20),
+    } : null;
     let sniperAlive = 0;
     for (let gi = 0; gi < groupCount; gi++) {
-      const group = rollGroup(baseSize, Math.random);
+      const size = Math.max(2, Math.min(20, groupSizes[gi]));
+      const group = clampedW
+        ? rollGroupWeighted(size, clampedW, Math.random)
+        : rollGroup(size, Math.random);
       // anchor point spread across map
       const ax = 600 + ((gi + 1) / (groupCount + 1)) * (this.worldW - 1200);
       const ay = 300 + Math.random() * (this.worldH - 600);
@@ -338,6 +353,38 @@ export class GameEngine {
         this.enemies.push(this.makeEnemy(cls, pos, cfg));
       }
     }
+  }
+
+  private spawnChests(cfg: LevelConfig) {
+    if (this.level === 4) {
+      // 1 guaranteed chest in boss arena far corner
+      const pos = this.nudgeOutOfWalls({ x: 320, y: 320 }, 24);
+      this.pickups.push(this.makeChest(pos));
+      return;
+    }
+    const count = cfg.groupPlan?.chestCount ?? (3 + this.level);
+    for (let i = 0; i < count; i++) {
+      let pos: Vec = {
+        x: 220 + Math.random() * (this.worldW - 440),
+        y: 220 + Math.random() * (this.worldH - 440),
+      };
+      // Keep chests away from player spawn corridor and the gate.
+      if (Math.hypot(pos.x - 220, pos.y - this.worldH / 2) < 220) pos.x += 280;
+      if (Math.hypot(pos.x - this.exitGate.x, pos.y - this.exitGate.y) < 180) pos.x -= 320;
+      pos = this.nudgeOutOfWalls(pos, 24);
+      this.pickups.push(this.makeChest(pos));
+    }
+  }
+
+  private makeChest(pos: Vec): Pickup {
+    // rarity roll: 65% common, 25% rare, 10% epic
+    const r = Math.random();
+    const rarity: "common" | "rare" | "epic" = r < 0.65 ? "common" : r < 0.90 ? "rare" : "epic";
+    const loot =
+      rarity === "epic" ? 120 + Math.floor(Math.random() * 80) :
+      rarity === "rare" ? 60  + Math.floor(Math.random() * 50) :
+                          25  + Math.floor(Math.random() * 30);
+    return { kind: "chest", pos, r: 20, taken: false, opened: false, loot, rarity, openTime: 0 };
   }
 
   private makeEnemy(cls: EnemyClass, pos: Vec, cfg: LevelConfig): Enemy {
