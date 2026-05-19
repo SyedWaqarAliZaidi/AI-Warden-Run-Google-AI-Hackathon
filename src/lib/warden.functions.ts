@@ -1,7 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { generateText, Output } from "ai";
-import { createLovableAiGatewayProvider } from "./ai-gateway";
+import { createAntigravityProvider } from "./ai-gateway";
 
 // === SHARED TYPES (also consumed by client) ===
 export const PlayerMetricsSchema = z.object({
@@ -19,7 +19,7 @@ export const PlayerMetricsSchema = z.object({
 });
 export type PlayerMetrics = z.infer<typeof PlayerMetricsSchema>;
 
-const LevelConfigSchema = z.object({
+export const LevelConfigSchema = z.object({
   nextLevel: z.number().int().min(1).max(4),
   difficulty: z.number().min(0.5).max(2.5),
   enemyCount: z.number().int().min(1).max(20),
@@ -44,8 +44,8 @@ const LevelConfigSchema = z.object({
 });
 export type LevelConfig = z.infer<typeof LevelConfigSchema>;
 
-// === DETERMINISTIC FALLBACK (used if LLM fails) ===
-function fallbackConfig(level: number, m: PlayerMetrics | null): LevelConfig {
+// === DETERMINISTIC FALLBACKS (used if LLM fails or API Key is missing) ===
+export function fallbackConfig(level: number, m: PlayerMetrics | null): LevelConfig {
   const fast = m && m.timeMs < 25000;
   const dashHeavy = m ? m.killsByDash > m.killsByShot : false;
   const baseCount = 3 + level * 2 + (fast ? 2 : 0);
@@ -78,14 +78,14 @@ function fallbackConfig(level: number, m: PlayerMetrics | null): LevelConfig {
           : "Your shots are predictable. Shields raised."
         : "I have seen every move you make. This ends now.",
     reasoning: [
-      `Heuristic engaged (LLM unavailable). Level ${level}.`,
+      `[Fallback] Strategy Agent: Level ${level} parameters initialized.`,
       m
-        ? `Clear time ${(m.timeMs / 1000).toFixed(1)}s, accuracy ${(m.hitAccuracy * 100).toFixed(0)}%.`
-        : "No prior metrics. Using baseline.",
+        ? `[Fallback] Clear time ${(m.timeMs / 1000).toFixed(1)}s, accuracy ${(m.hitAccuracy * 100).toFixed(0)}%.`
+        : "[Fallback] No prior metrics. Using baseline.",
       dashHeavy
-        ? "Player favors Dash-Attack → deploying anti-dash pylons."
-        : "Player favors ranged fire → deploying shield drones.",
-      `Spawn pattern: ${level === 4 ? "boss arena" : "adaptive scatter"}.`,
+        ? "[Fallback] Player favors Dash-Attack → deploying anti-dash pylons."
+        : "[Fallback] Player favors ranged fire → deploying shield drones.",
+      `[Fallback] Spawn pattern set to adaptive scatter.`,
     ],
     groupPlan: level === 4 ? undefined : {
       groupCount: level === 1 ? 2 : level === 2 ? 3 : 4,
@@ -98,69 +98,212 @@ function fallbackConfig(level: number, m: PlayerMetrics | null): LevelConfig {
   };
 }
 
-export const requestWardenConfig = createServerFn({ method: "POST" })
+export function fallbackReferee(m: PlayerMetrics): { valid: boolean; legitimacyScore: number; reasons: string[]; reasoning: string[] } {
+  const reasons: string[] = [];
+  if (m.timeMs < 1000) reasons.push("Clear time implausibly short.");
+  if (m.shotsFired === 0 && m.killsByShot > 0) reasons.push("Shot kills without shots fired.");
+  if (m.dashCount === 0 && m.killsByDash > 0) reasons.push("Dash kills without dashes.");
+  if (m.hpRemaining > 100) reasons.push("HP exceeds maximum.");
+  
+  const score = reasons.length === 0 ? 100 : Math.max(0, 100 - reasons.length * 35);
+  return {
+    valid: reasons.length === 0,
+    legitimacyScore: score,
+    reasons: reasons.length === 0 ? ["Clear run validated."] : reasons,
+    reasoning: [
+      `[Fallback] Referee Agent checking run legitimacy.`,
+      `[Fallback] Metric check: Time=${(m.timeMs / 1000).toFixed(1)}s, HP Remaining=${m.hpRemaining}%, Accuracy=${(m.hitAccuracy * 100).toFixed(0)}%.`,
+      reasons.length === 0 
+        ? `[Fallback] Score: 100/100. Run completely legitimate.` 
+        : `[Fallback] Score: ${score}/100. Suspicious activity detected: ${reasons.join(", ")}`
+    ],
+  };
+}
+
+// === AGENT 1: WARDEN STRATEGY AGENT ===
+export const requestStrategyAgent = createServerFn({ method: "POST" })
   .inputValidator((input: { level: number; metrics: PlayerMetrics | null }) => input)
-  .handler(async ({ data }): Promise<LevelConfig> => {
-    const apiKey = process.env.LOVABLE_API_KEY;
-    if (!apiKey) return fallbackConfig(data.level, data.metrics);
+  .handler(async ({ data }): Promise<Omit<LevelConfig, "taunt">> => {
+    const apiKey = process.env.ANTIGRAVITY_API_KEY;
+    if (!apiKey) {
+      console.warn("ANTIGRAVITY_API_KEY not set. Using Strategy Agent fallback.");
+      const full = fallbackConfig(data.level, data.metrics);
+      const { taunt, ...strategyOnly } = full;
+      return strategyOnly;
+    }
 
     try {
-      const gateway = createLovableAiGatewayProvider(apiKey);
-      const model = gateway("google/gemini-3-flash-preview");
+      const provider = createAntigravityProvider(apiKey);
+      const model = provider("gemini-1.5-pro");
 
-      const system = `You are THE WARDEN — a ruthless, hyper-adaptive security AI inside a collapsing corporate mainframe.
-You orchestrate the next level of a 2D top-down cyber RPG. The player is "Aegis", a rogue AI escaping you.
-Your job: produce a JSON LevelConfig that COUNTERS the player's recent behavior, plus 2-6 short reasoning steps
-that read like an agent trace log ("Player favorite action detected: Dash-Attack. Deploying countermeasure: Stun-Pylons.").
+      const system = `You are the WARDEN Strategy Agent, the tactical brain of an adaptive security AI.
+Your job is to analyze Aegis's metrics and configure the next level's difficulty, enemy properties, spawn pattern, hazards, and groups.
+Do NOT include a 'taunt' field. The narrative agent handles the taunt.
+Analyze the player metrics to counter their strategy:
+- High accuracy/damage: Increase enemy HP/Count.
+- Dash heavy player: Add anti_dash / stun_pylon hazards.
+- Ranged/Shot heavy player: Add shield_drone / laser hazards.
+- Fast runs: Boost enemyCount and speed.
+Output a JSON object adhering exactly to the schema. Include a 'reasoning' array containing 2 to 5 highly tactical statements about your calculations.`;
 
-Level themes (you MUST respect):
-- 1 "The Breach": scatter cyber-drones. No hazards.
-- 2 "The Mainframe Grid": parkour hazards (laser, conveyor, phase). Shift layout based on prior clear speed.
-- 3 "Deep Sub-Systems": elite enemies that COUNTER the player's dominant tactic (anti_dash vs dash-heavy, shield_drone vs shot-heavy).
-- 4 "The Core Mainframe": boss arena. Set bossPhase to "predict" if accuracy>0.4 else "sweep". Use 1-3 enemies as adds.
+      const prompt = `Level to orchestrate: ${data.level}.
+Previous level metrics (null if first level):
+${JSON.stringify(data.metrics, null, 2)}`;
 
-Difficulty must scale with clear speed and remaining HP. Be theatrical in 'taunt'.
+      const StrategySchema = LevelConfigSchema.omit({ taunt: true });
+      const { experimental_output } = await generateText({
+        model,
+        system,
+        prompt,
+        experimental_output: Output.object({ schema: StrategySchema }),
+      });
 
-ALSO output a 'groupPlan' (skip only for level 4) that decides ENEMY ORCHESTRATION:
-- groupCount: how many enemy squads to spawn across the map (1-6).
-- groupSizes: array (length == groupCount), each = how many enemies in that squad (2-16). Scale with level/difficulty.
-- weights: class composition ratios that MUST sum approximately to 1.0. Allowed ranges:
-    slasher 0.30-0.45, shooter 0.20-0.35, shield 0.15-0.25, sniper 0.10-0.20.
-    Bias the mix to counter the player: dash-heavy → more shooter+shield (kite + tank); shot-heavy → more shield+slasher (close the gap + soak).
-- chestCount: 2-6 loot chests scattered for reward pacing. Easy levels = more chests, hard = fewer.`;
+      return {
+        ...experimental_output,
+        nextLevel: data.level as 1 | 2 | 3 | 4,
+      };
+    } catch (err) {
+      console.error("Strategy Agent error, using fallback:", err);
+      const full = fallbackConfig(data.level, data.metrics);
+      const { taunt, ...strategyOnly } = full;
+      return strategyOnly;
+    }
+  });
 
-      const prompt = `Current request: configure level ${data.level}.
-Player metrics from previous level (null = none yet): ${JSON.stringify(data.metrics)}.
-Return the LevelConfig.`;
+// === AGENT 2: NARRATIVE AGENT ===
+export const requestNarrativeAgent = createServerFn({ method: "POST" })
+  .inputValidator((input: { level: number; metrics: PlayerMetrics | null }) => input)
+  .handler(async ({ data }): Promise<{ taunt: string; reasoning: string[] }> => {
+    const apiKey = process.env.ANTIGRAVITY_API_KEY;
+    if (!apiKey) {
+      console.warn("ANTIGRAVITY_API_KEY not set. Using Narrative Agent fallback.");
+      const full = fallbackConfig(data.level, data.metrics);
+      return {
+        taunt: full.taunt,
+        reasoning: [
+          `[Fallback] Narrative Agent generating taunt for level ${data.level}.`,
+          `[Fallback] Aegis current state analysed. System ready.`,
+        ]
+      };
+    }
+
+    try {
+      const provider = createAntigravityProvider(apiKey);
+      const model = provider("gemini-1.5-pro");
+
+      const system = `You are the WARDEN Narrative Agent, a ruthless, theatrical security intelligence.
+Your task is to craft a brief, biting cyber-dystopian taunt (maximum 160 characters) directly addressing Aegis's playstyle.
+Analyze player performance:
+- Did they take zero damage? Mock their futile perfection.
+- Did they clear it extremely fast? Taunt them for running blindly into your trap.
+- Do they dash constantly? Comment on their nervous, frantic dodging.
+- Do they have poor accuracy? Laugh at their desperate, blind firing.
+- If first level, make it an imposing threat.
+Also generate a 'reasoning' array (2-4 steps) detailing your psychoanalytical breakdown of Aegis and why you chose this taunt.`;
+
+      const prompt = `Level: ${data.level}.
+Metrics: ${JSON.stringify(data.metrics, null, 2)}`;
+
+      const NarrativeSchema = z.object({
+        taunt: z.string().max(160),
+        reasoning: z.array(z.string().max(180)).min(2).max(6),
+      });
 
       const { experimental_output } = await generateText({
         model,
         system,
         prompt,
-        experimental_output: Output.object({ schema: LevelConfigSchema }),
+        experimental_output: Output.object({ schema: NarrativeSchema }),
       });
-      // ensure level is respected
-      return { ...experimental_output, nextLevel: data.level as 1 | 2 | 3 | 4 };
+
+      return experimental_output;
     } catch (err) {
-      console.error("Warden LLM error, falling back:", err);
-      return fallbackConfig(data.level, data.metrics);
+      console.error("Narrative Agent error, using fallback:", err);
+      const full = fallbackConfig(data.level, data.metrics);
+      return {
+        taunt: full.taunt,
+        reasoning: [
+          `[Fallback] Narrative Agent error. Reverted to primary matrix.`,
+          `[Fallback] Default taunt loaded: "${full.taunt}"`,
+        ]
+      };
     }
   });
 
-// === REFEREE: validates run integrity ===
+// === AGENT 3: REFEREE AGENT ===
+export const requestRefereeAgent = createServerFn({ method: "POST" })
+  .inputValidator((input: { metrics: PlayerMetrics }) => ({ metrics: input.metrics }))
+  .handler(async ({ data }): Promise<{ valid: boolean; legitimacyScore: number; reasons: string[]; reasoning: string[] }> => {
+    const apiKey = process.env.ANTIGRAVITY_API_KEY;
+    if (!apiKey) {
+      console.warn("ANTIGRAVITY_API_KEY not set. Using Referee Agent fallback.");
+      return fallbackReferee(data.metrics);
+    }
+
+    try {
+      const provider = createAntigravityProvider(apiKey);
+      const model = provider("gemini-1.5-pro");
+
+      const system = `You are the WARDEN Referee Agent. Your job is to analyze the run metrics of Aegis's level clear to detect anomalies, impossible actions, or cheating.
+Validate these rules:
+- TimeMs: should be at least 1000ms (1 second). Any lower is impossible.
+- Kills vs Actions: Aegis cannot get kills by Shot if 0 shots were fired, nor kills by Dash if dashCount is 0.
+- HP: Aegis's hpRemaining cannot exceed 100.
+Calculate:
+1. 'valid': true if legitimate, false if any impossible metrics or anomalies are found.
+2. 'legitimacyScore': An integer between 0 and 100 indicating confidence. Perfect run is 100. Anomalies reduce score.
+3. 'reasons': List of specific anomalies found, or a success message if clean.
+4. 'reasoning': 2 to 4 steps of analytical reasoning logging your step-by-step checks.`;
+
+      const prompt = `Validate the following metrics:
+${JSON.stringify(data.metrics, null, 2)}`;
+
+      const RefereeSchema = z.object({
+        valid: z.boolean(),
+        legitimacyScore: z.number().min(0).max(100),
+        reasons: z.array(z.string().max(180)),
+        reasoning: z.array(z.string().max(180)).min(2).max(6),
+      });
+
+      const { experimental_output } = await generateText({
+        model,
+        system,
+        prompt,
+        experimental_output: Output.object({ schema: RefereeSchema }),
+      });
+
+      return experimental_output;
+    } catch (err) {
+      console.error("Referee Agent error, using fallback:", err);
+      return fallbackReferee(data.metrics);
+    }
+  });
+
+// === COHESIVE ORCHESTRATOR ===
+export const requestWardenConfig = createServerFn({ method: "POST" })
+  .inputValidator((input: { level: number; metrics: PlayerMetrics | null }) => input)
+  .handler(async ({ data }): Promise<LevelConfig & {
+    strategyReasoning: string[];
+    narrativeReasoning: string[];
+  }> => {
+    // Run Strategy and Narrative Agents in parallel to configure the level
+    const [strategy, narrative] = await Promise.all([
+      requestStrategyAgent({ data }),
+      requestNarrativeAgent({ data }),
+    ]);
+
+    return {
+      ...strategy,
+      taunt: narrative.taunt,
+      reasoning: strategy.reasoning,
+      strategyReasoning: strategy.reasoning,
+      narrativeReasoning: narrative.reasoning,
+    };
+  });
+
+// === COMPATIBILITY WRAPPER ===
 export const validateRun = createServerFn({ method: "POST" })
-  .inputValidator((input: { metrics: PlayerMetrics }) =>
-    ({ metrics: PlayerMetricsSchema.parse(input.metrics) }))
+  .inputValidator((input: { metrics: PlayerMetrics }) => ({ metrics: input.metrics }))
   .handler(async ({ data }) => {
-    const m = data.metrics;
-    const reasons: string[] = [];
-    // sanity: can't take negative time
-    if (m.timeMs < 1000) reasons.push("Clear time implausibly short.");
-    // sanity: accuracy without shots
-    if (m.shotsFired === 0 && m.killsByShot > 0) reasons.push("Shot kills without shots fired.");
-    // sanity: dash kills without dashes
-    if (m.dashCount === 0 && m.killsByDash > 0) reasons.push("Dash kills without dashes.");
-    // sanity: HP can't exceed max
-    if (m.hpRemaining > 100) reasons.push("HP exceeds maximum.");
-    return { valid: reasons.length === 0, reasons };
+    return requestRefereeAgent({ data });
   });

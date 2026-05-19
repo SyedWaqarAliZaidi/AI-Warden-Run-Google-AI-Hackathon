@@ -11,6 +11,7 @@ import {
   type LevelConfig,
   type PlayerMetrics,
 } from "@/lib/warden.functions";
+import { AgentTracePanel, type TraceEntry } from "./AgentTracePanel";
 
 type Phase = "menu" | "loading" | "playing" | "between" | "won" | "lost";
 
@@ -52,6 +53,21 @@ export function WardenGame() {
   const [freezeActive, setFreezeActive] = useState(false);
   const [upgradesVer, setUpgradesVer] = useState(0); // bump to re-render shop
   const traceIdRef = useRef(0);
+
+  const [agentTraces, setAgentTraces] = useState<TraceEntry[]>([]);
+
+  const pushAgentTrace = useCallback((agent: TraceEntry["agent"], action: string, decision: string, reasoning: string[], isThinking = false) => {
+    setAgentTraces((prev) => {
+      const timestamp = new Date().toLocaleTimeString();
+      const id = `${agent}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      
+      const filtered = prev.filter(t => !(t.agent === agent && t.isThinking));
+      return [
+        { id, agent, action, decision, reasoning, timestamp, isThinking },
+        ...filtered
+      ].slice(0, 50);
+    });
+  }, []);
 
   const callWarden = useServerFn(requestWardenConfig);
   const callReferee = useServerFn(validateRun);
@@ -159,8 +175,30 @@ export function WardenGame() {
       setPhase("loading");
       setDeathReason(null);
       pushTrace(`Warden orchestrating Level ${lvl} on ${difficulty.toUpperCase()}…`, "system");
+      
+      // Trigger thinking state for Strategy and Narrative Agents
+      pushAgentTrace("strategy", "Orchestrating level parameters & class balancing", "Running tactical simulation...", [], true);
+      pushAgentTrace("narrative", "Evaluating Aegis performance & selecting taunt vector", "Analyzing psychological telemetry...", [], true);
+
       try {
         const cfg = await callWarden({ data: { level: lvl, metrics: prevMetrics } });
+        
+        // Resolve Strategy Agent Trace
+        pushAgentTrace(
+          "strategy",
+          `Level ${lvl} Strategy Configuration`,
+          `Difficulty: ${cfg.difficulty.toFixed(2)} | Enemies: ${cfg.enemyCount} (Hp:${cfg.enemyHp}, Spd:${cfg.enemySpeed}) | Spawn: ${cfg.spawnPattern.toUpperCase()}`,
+          cfg.strategyReasoning || cfg.reasoning || []
+        );
+
+        // Resolve Narrative Agent Trace
+        pushAgentTrace(
+          "narrative",
+          `Synthesizing Taunt for Aegis`,
+          `Taunt Selected: "${cfg.taunt}"`,
+          cfg.narrativeReasoning || []
+        );
+
         setConfig(cfg);
         setCurrentLevel(lvl);
         const g = engineRef.current!;
@@ -173,10 +211,11 @@ export function WardenGame() {
         setPhase("playing");
       } catch (err) {
         pushTrace(`Warden unreachable: ${(err as Error).message}`, "system");
+        setAgentTraces(prev => prev.filter(t => !t.isThinking));
         setPhase("menu");
       }
     },
-    [callWarden, pushTrace, difficulty],
+    [callWarden, pushTrace, difficulty, pushAgentTrace],
   );
 
   const handleLevelCleared = async (metrics: PlayerMetrics) => {
@@ -186,8 +225,27 @@ export function WardenGame() {
       `Level ${metrics.level} cleared in ${(metrics.timeMs / 1000).toFixed(1)}s — acc ${(metrics.hitAccuracy * 100).toFixed(0)}%`,
       "system",
     );
+
+    // Trigger thinking state for Referee Agent
+    pushAgentTrace("referee", `Auditing Aegis telemetry for Level ${metrics.level}`, "Performing standard safety analysis...", [], true);
+
     try {
       const v = await callReferee({ data: { metrics } });
+      
+      // Resolve Referee Agent Trace
+      pushAgentTrace(
+        "referee",
+        `Level ${metrics.level} Audit Complete`,
+        v.valid 
+          ? `Run verified legitimate (Score: ${v.legitimacyScore || 100}/100)` 
+          : `Security flag raised (Score: ${v.legitimacyScore || 0}/100)`,
+        [
+          `Legitimacy verdict: ${v.valid ? "VALID" : "FLAGGED ANOMALY"}`,
+          ...(v.reasons || []),
+          ...(v.reasoning || [])
+        ]
+      );
+
       if (!v.valid) {
         setRefereeMsg(`Referee flagged: ${v.reasons.join(", ")}`);
         pushTrace(`REFEREE: invalid run — ${v.reasons.join(", ")}`, "system");
@@ -195,7 +253,10 @@ export function WardenGame() {
         setRefereeMsg(null);
         pushTrace("REFEREE: run validated ✓", "system");
       }
-    } catch { /* ignore */ }
+    } catch (err) {
+      setAgentTraces(prev => prev.filter(t => !t.isThinking));
+      pushTrace(`Referee unreachable: ${(err as Error).message}`, "system");
+    }
     if (metrics.level >= 4) setPhase("won");
   };
 
@@ -566,6 +627,8 @@ export function WardenGame() {
           </div>
         </aside>
       </div>
+
+      <AgentTracePanel traces={agentTraces} onClear={() => setAgentTraces([])} />
 
       <style>{`
         .neon-btn {
