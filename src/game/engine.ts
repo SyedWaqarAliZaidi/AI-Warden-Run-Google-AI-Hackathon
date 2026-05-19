@@ -611,8 +611,23 @@ export class GameEngine {
 
     this.elapsed += dt;
     this.timeLeft = Math.max(0, this.timeLeft - dt);
+    if (this.freezeCd > 0) this.freezeCd = Math.max(0, this.freezeCd - dt);
+    if (this.grenadeCd > 0) this.grenadeCd = Math.max(0, this.grenadeCd - dt);
+    if (this.freezeActive > 0) {
+      this.freezeActive = Math.max(0, this.freezeActive - dt);
+      if (this.freezeActive === 0) audio.play("freezeEnd");
+    }
+    // While time is frozen, the player can still act; enemies/bullets/hazards/grenade fuses are paused.
+    const frozen = this.freezeActive > 0;
+    if (this.reloading > 0) {
+      this.reloading = Math.max(0, this.reloading - dt);
+      if (this.reloading === 0) {
+        const d = derive(this.upgrades);
+        this.ammo = d.magazine;
+      }
+    }
     if (this.blindActive > 0) this.blindActive = Math.max(0, this.blindActive - dt);
-    if (this.stunWarn > 0) {
+    if (this.stunWarn > 0 && !frozen) {
       this.stunWarn = Math.max(0, this.stunWarn - dt);
       if (this.stunWarn === 0) {
         // trigger actual stun
@@ -625,9 +640,11 @@ export class GameEngine {
 
     this.buffer = this.buffer.filter((b) => this.elapsed - b.t < INPUT_BUFFER_TIME);
     this.updatePlayer(dt);
-    this.updateEnemies(dt);
-    this.updateBullets(dt);
-    this.updateHazards(dt);
+    if (!frozen) this.updateEnemies(dt);
+    if (!frozen) this.updateBullets(dt);
+    if (!frozen) this.updateHazards(dt);
+    this.updateGrenades(dt, frozen);
+    this.updateFloats(dt);
     this.updateParticles(dt);
     this.updatePickups();
     this.checkCollisions();
