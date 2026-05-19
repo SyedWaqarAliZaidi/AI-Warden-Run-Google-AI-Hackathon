@@ -4,6 +4,7 @@ import { GameEngine, VIEW_W, VIEW_H, type GameEvent } from "@/game/engine";
 import { render } from "@/game/render";
 import { DIFFICULTY_PRESETS, LEVEL_TIME_LIMITS, type Difficulty } from "@/game/types";
 import { audio } from "@/lib/audio";
+import { UPGRADES, derive, type UpgradeId } from "@/game/upgrades";
 import {
   requestWardenConfig,
   validateRun,
@@ -42,6 +43,14 @@ export function WardenGame() {
   const [stunWarn, setStunWarn] = useState(0);
   const [healUsed, setHealUsed] = useState(false);
   const [deathReason, setDeathReason] = useState<string | null>(null);
+  const [currency, setCurrency] = useState(0);
+  const [ammo, setAmmo] = useState(10);
+  const [magazine, setMagazine] = useState(10);
+  const [reloading, setReloading] = useState(0);
+  const [freezeCharges, setFreezeCharges] = useState(0);
+  const [grenadeCharges, setGrenadeCharges] = useState(0);
+  const [freezeActive, setFreezeActive] = useState(false);
+  const [upgradesVer, setUpgradesVer] = useState(0); // bump to re-render shop
   const traceIdRef = useRef(0);
 
   const callWarden = useServerFn(requestWardenConfig);
@@ -86,6 +95,13 @@ export function WardenGame() {
           setHealUsed(g.player.healUsed);
           setBlindActive(g.blindActive > 0);
           setStunWarn(g.stunWarn);
+          setCurrency(g.currency);
+          setAmmo(g.ammo);
+          setMagazine(derive(g.upgrades).magazine);
+          setReloading(g.reloading);
+          setFreezeCharges(g.freezeCharges);
+          setGrenadeCharges(g.grenadeCharges);
+          setFreezeActive(g.freezeActive > 0);
           const boss = g.enemies.find((e) => e.isBoss);
           if (boss) setBossPhase((boss.bossPhase ?? 1) as 1 | 2);
         }
@@ -102,8 +118,11 @@ export function WardenGame() {
     if (!g) return;
     const onDown = (e: KeyboardEvent) => {
       const k = e.key.toLowerCase();
-      if (["w", "a", "s", "d", "arrowup", "arrowdown", "arrowleft", "arrowright", " "].includes(k)) e.preventDefault();
+      if (["w","a","s","d","arrowup","arrowdown","arrowleft","arrowright"," ","q","e","r"].includes(k)) e.preventDefault();
       if (k === " " || k === "shift") g.pressAction("dash");
+      else if (k === "q") g.pressAction("freeze");
+      else if (k === "e") g.pressAction("grenade");
+      else if (k === "r") g.pressAction("reload");
       else g.keys.add(k);
     };
     const onUp = (e: KeyboardEvent) => g.keys.delete(e.key.toLowerCase());
@@ -192,6 +211,12 @@ export function WardenGame() {
     setLastMetrics(null);
     setRefereeMsg(null);
     setDeathReason(null);
+    // Fresh run: reset progression
+    if (engineRef.current) {
+      engineRef.current.currency = 0;
+      engineRef.current.upgrades = { hp: 0, sword: 0, bullet: 0, capacity: 0, freeze: 0, grenade: 0 };
+    }
+    setUpgradesVer((v) => v + 1);
     startLevel(1, null);
   };
   const nextLevel = () => { if (lastMetrics) startLevel(lastMetrics.level + 1, lastMetrics); };
@@ -421,6 +446,7 @@ export function WardenGame() {
                   <span>HP left</span><span>{lastMetrics.hpRemaining}</span>
                 </div>
                 {refereeMsg && <div className="text-xs text-red-400 mb-3">{refereeMsg}</div>}
+                <UpgradeShop engineRef={engineRef} version={upgradesVer} bump={() => setUpgradesVer((v) => v + 1)} />
                 <button onClick={nextLevel} className="neon-btn">ENTER LEVEL {lastMetrics.level + 1}</button>
               </Overlay>
             )}
@@ -443,6 +469,7 @@ export function WardenGame() {
                 <p className="text-cyan-200/80 text-sm mb-4">
                   {deathReason ?? "The Warden compiled a counter to you."}
                 </p>
+                <UpgradeShop engineRef={engineRef} version={upgradesVer} bump={() => setUpgradesVer((v) => v + 1)} />
                 <div className="flex gap-3">
                   <button onClick={retry} className="neon-btn">RETRY LEVEL</button>
                   <button onClick={begin} className="neon-btn-outline">RESTART RUN</button>
@@ -450,6 +477,28 @@ export function WardenGame() {
               </Overlay>
             )}
           </div>
+
+          {/* === Ability / ammo / currency HUD === */}
+          {phase === "playing" && (
+            <div className="absolute bottom-3 left-3 pointer-events-none flex flex-col gap-1.5 text-[11px] font-mono">
+              <div className="flex gap-2 items-center bg-[#04060e]/85 border border-cyan-500/40 rounded px-2 py-1">
+                <span className="text-amber-300" style={{ textShadow: "0 0 6px #ffaa44" }}>¢ {currency}</span>
+              </div>
+              <div className="flex gap-2 items-center bg-[#04060e]/85 border border-cyan-500/40 rounded px-2 py-1">
+                <span className="text-cyan-300">AMMO</span>
+                <span className={reloading > 0 ? "text-amber-300 animate-pulse" : "text-cyan-100"}>
+                  {reloading > 0 ? "RELOADING" : `${ammo}/${magazine}`}
+                </span>
+                <span className="text-cyan-500/40 ml-1">[R]</span>
+              </div>
+              <div className="flex gap-2 items-center bg-[#04060e]/85 border border-cyan-500/40 rounded px-2 py-1">
+                <span className={freezeActive ? "text-sky-200 animate-pulse" : "text-sky-300"}>❄ {freezeCharges}</span>
+                <span className="text-cyan-500/40">[Q]</span>
+                <span className="text-amber-300 ml-2">✸ {grenadeCharges}</span>
+                <span className="text-cyan-500/40">[E]</span>
+              </div>
+            </div>
+          )}
 
           {/* Mobile controls */}
           <div className="lg:hidden mt-3 flex items-center justify-between gap-3 select-none">
@@ -462,13 +511,16 @@ export function WardenGame() {
               className="w-28 h-28 rounded-full border-2 border-cyan-500/50 bg-cyan-500/5 touch-none"
               style={{ boxShadow: "0 0 20px rgba(0,240,255,0.2)" }}
             />
-            <button
-              onPointerDown={() => engineRef.current?.pressAction("dash")}
-              className="w-20 h-20 rounded-full border-2 border-fuchsia-400/60 bg-fuchsia-500/10 text-fuchsia-200 font-bold tracking-widest"
-              style={{ boxShadow: "0 0 20px rgba(255,0,200,0.3)" }}
-            >
-              DASH
-            </button>
+            <div className="grid grid-cols-2 gap-2">
+              <button onPointerDown={() => engineRef.current?.pressAction("dash")}
+                className="w-16 h-16 rounded-full border-2 border-fuchsia-400/60 bg-fuchsia-500/10 text-fuchsia-200 font-bold text-xs">DASH</button>
+              <button onPointerDown={() => engineRef.current?.pressAction("shoot")}
+                className="w-16 h-16 rounded-full border-2 border-emerald-400/60 bg-emerald-500/10 text-emerald-200 font-bold text-xs">FIRE</button>
+              <button onPointerDown={() => engineRef.current?.pressAction("freeze")}
+                className="w-16 h-16 rounded-full border-2 border-sky-400/60 bg-sky-500/10 text-sky-200 font-bold text-xs">❄ {freezeCharges}</button>
+              <button onPointerDown={() => engineRef.current?.pressAction("grenade")}
+                className="w-16 h-16 rounded-full border-2 border-amber-400/60 bg-amber-500/10 text-amber-200 font-bold text-xs">✸ {grenadeCharges}</button>
+            </div>
           </div>
         </div>
 

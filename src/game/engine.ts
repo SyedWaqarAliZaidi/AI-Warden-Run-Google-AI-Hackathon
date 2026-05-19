@@ -1,9 +1,10 @@
 import type {
-  Bullet, Enemy, EnemyClass, Hazard, Particle, Pickup, Player, Vec, Wall, AnimState, Difficulty,
+  Bullet, Enemy, EnemyClass, Hazard, Particle, Pickup, Player, Vec, Wall, AnimState, Difficulty, Grenade, FloatingText,
 } from "./types";
 import { DIFFICULTY_PRESETS, LEVEL_TIME_LIMITS, SNIPER_MAX_ALIVE } from "./types";
 import type { LevelConfig, PlayerMetrics } from "@/lib/warden.functions";
 import { audio } from "@/lib/audio";
+import { derive, newUpgradeLevels, type UpgradeLevels } from "./upgrades";
 
 export const VIEW_W = 900;
 export const VIEW_H = 600;
@@ -22,7 +23,7 @@ const SHOOT_CD = 0.22;
 const BULLET_SPEED = 620;
 const INPUT_BUFFER_TIME = 0.12;
 
-type Action = "dash" | "shoot";
+type Action = "dash" | "shoot" | "freeze" | "grenade" | "reload";
 
 export type EngineState = "countdown" | "playing" | "victory" | "dead";
 
@@ -31,7 +32,8 @@ export type GameEvent =
   | { type: "metrics"; metrics: PlayerMetrics }
   | { type: "level_cleared"; metrics: PlayerMetrics }
   | { type: "death"; reason?: string }
-  | { type: "warden_taunt"; msg: string };
+  | { type: "warden_taunt"; msg: string }
+  | { type: "currency"; amount: number; total: number };
 
 const WORLD_SIZES: Record<number, { w: number; h: number }> = {
   1: { w: 3200, h: 2100 },
@@ -114,6 +116,8 @@ export class GameEngine {
   particles: Particle[] = [];
   walls: Wall[] = [];
   pickups: Pickup[] = [];
+  grenades: Grenade[] = [];
+  floats: FloatingText[] = [];
   level = 1;
   worldW = 1600;
   worldH = 1100;
@@ -131,6 +135,17 @@ export class GameEngine {
   blindActive = 0;         // seconds remaining
   stunWarn = 0;            // seconds left on warning telegraph (before stun)
   bossKilled = false;
+
+  // === Progression / abilities ===
+  upgrades: UpgradeLevels = newUpgradeLevels();
+  currency = 0;
+  ammo = 10;
+  reloading = 0;            // seconds remaining
+  freezeCharges = 0;
+  grenadeCharges = 0;
+  freezeActive = 0;         // seconds remaining of time-freeze
+  freezeCd = 0;             // small input cd between throws
+  grenadeCd = 0;
 
   m = {
     damageDealt: 0,
@@ -157,11 +172,12 @@ export class GameEngine {
 
   resetPlayer(fullReset: boolean) {
     const healUsed = fullReset ? false : this.player?.healUsed ?? false;
+    const d = derive(this.upgrades);
     this.player = {
       pos: { x: 220, y: this.worldH / 2 },
       vel: { x: 0, y: 0 },
-      hp: 100,
-      maxHp: 100,
+      hp: d.maxHp,
+      maxHp: d.maxHp,
       facing: { x: 1, y: 0 },
       dashCd: 0, dashTime: 0, iFrames: 0,
       shootCd: 0,
@@ -172,6 +188,13 @@ export class GameEngine {
       attackSwing: 0,
       healUsed,
     };
+    this.ammo = d.magazine;
+    this.reloading = 0;
+    this.freezeCharges = d.freezeMax;
+    this.grenadeCharges = d.grenadeMax;
+    this.freezeActive = 0;
+    this.freezeCd = 0;
+    this.grenadeCd = 0;
   }
 
   setDifficulty(d: Difficulty) {
@@ -191,6 +214,8 @@ export class GameEngine {
     this.particles = [];
     this.walls = [];
     this.pickups = [];
+    this.grenades = [];
+    this.floats = [];
     this.blindActive = 0;
     this.stunWarn = 0;
     this.bossKilled = false;
@@ -206,6 +231,7 @@ export class GameEngine {
     this.buildWalls();
     this.spawnEnemies(cfg);
     this.spawnHazards(cfg);
+    this.spawnChests(cfg);
     if (this.level === 4) {
       // healing item: far corner from boss
       this.pickups.push({ kind: "heal", pos: { x: 200, y: this.worldH - 200 }, r: 22, taken: false });
@@ -288,13 +314,28 @@ export class GameEngine {
       this.enemies.push(this.makeEnemy("boss", { x: cx, y: cy - 180 }, cfg));
       return;
     }
-    // Group-based spawning. Each group spawns clustered in a different region of the map.
     const presets = DIFFICULTY_PRESETS[this.difficulty];
-    const baseSize = presets.groupBase + (this.level - 1); // L1 easy=6, L1 nightmare=14
-    const groupCount = this.level === 1 ? 2 : this.level === 2 ? 3 : 4;
+    // Prefer AI-orchestrated group plan when present.
+    const aiPlan = cfg.groupPlan;
+    const baseSize = presets.groupBase + (this.level - 1);
+    const groupCount = aiPlan?.groupCount ?? (this.level === 1 ? 2 : this.level === 2 ? 3 : 4);
+    const groupSizes: number[] = Array.from({ length: groupCount }, (_, i) =>
+      aiPlan?.groupSizes?.[i] ?? baseSize,
+    );
+    // Build a normalized weight pool from AI (clamped to allowed ranges).
+    const w = aiPlan?.weights ?? null;
+    const clampedW = w ? {
+      slasher: clamp(w.slasher, 0.30, 0.45),
+      shooter: clamp(w.shooter, 0.20, 0.35),
+      shield:  clamp(w.shield,  0.15, 0.25),
+      sniper:  clamp(w.sniper,  0.10, 0.20),
+    } : null;
     let sniperAlive = 0;
     for (let gi = 0; gi < groupCount; gi++) {
-      const group = rollGroup(baseSize, Math.random);
+      const size = Math.max(2, Math.min(20, groupSizes[gi]));
+      const group = clampedW
+        ? rollGroupWeighted(size, clampedW, Math.random)
+        : rollGroup(size, Math.random);
       // anchor point spread across map
       const ax = 600 + ((gi + 1) / (groupCount + 1)) * (this.worldW - 1200);
       const ay = 300 + Math.random() * (this.worldH - 600);
@@ -312,6 +353,38 @@ export class GameEngine {
         this.enemies.push(this.makeEnemy(cls, pos, cfg));
       }
     }
+  }
+
+  private spawnChests(cfg: LevelConfig) {
+    if (this.level === 4) {
+      // 1 guaranteed chest in boss arena far corner
+      const pos = this.nudgeOutOfWalls({ x: 320, y: 320 }, 24);
+      this.pickups.push(this.makeChest(pos));
+      return;
+    }
+    const count = cfg.groupPlan?.chestCount ?? (3 + this.level);
+    for (let i = 0; i < count; i++) {
+      let pos: Vec = {
+        x: 220 + Math.random() * (this.worldW - 440),
+        y: 220 + Math.random() * (this.worldH - 440),
+      };
+      // Keep chests away from player spawn corridor and the gate.
+      if (Math.hypot(pos.x - 220, pos.y - this.worldH / 2) < 220) pos.x += 280;
+      if (Math.hypot(pos.x - this.exitGate.x, pos.y - this.exitGate.y) < 180) pos.x -= 320;
+      pos = this.nudgeOutOfWalls(pos, 24);
+      this.pickups.push(this.makeChest(pos));
+    }
+  }
+
+  private makeChest(pos: Vec): Pickup {
+    // rarity roll: 65% common, 25% rare, 10% epic
+    const r = Math.random();
+    const rarity: "common" | "rare" | "epic" = r < 0.65 ? "common" : r < 0.90 ? "rare" : "epic";
+    const loot =
+      rarity === "epic" ? 120 + Math.floor(Math.random() * 80) :
+      rarity === "rare" ? 60  + Math.floor(Math.random() * 50) :
+                          25  + Math.floor(Math.random() * 30);
+    return { kind: "chest", pos, r: 20, taken: false, opened: false, loot, rarity, openTime: 0 };
   }
 
   private makeEnemy(cls: EnemyClass, pos: Vec, cfg: LevelConfig): Enemy {
@@ -538,8 +611,23 @@ export class GameEngine {
 
     this.elapsed += dt;
     this.timeLeft = Math.max(0, this.timeLeft - dt);
+    if (this.freezeCd > 0) this.freezeCd = Math.max(0, this.freezeCd - dt);
+    if (this.grenadeCd > 0) this.grenadeCd = Math.max(0, this.grenadeCd - dt);
+    if (this.freezeActive > 0) {
+      this.freezeActive = Math.max(0, this.freezeActive - dt);
+      if (this.freezeActive === 0) audio.play("freezeEnd");
+    }
+    // While time is frozen, the player can still act; enemies/bullets/hazards/grenade fuses are paused.
+    const frozen = this.freezeActive > 0;
+    if (this.reloading > 0) {
+      this.reloading = Math.max(0, this.reloading - dt);
+      if (this.reloading === 0) {
+        const d = derive(this.upgrades);
+        this.ammo = d.magazine;
+      }
+    }
     if (this.blindActive > 0) this.blindActive = Math.max(0, this.blindActive - dt);
-    if (this.stunWarn > 0) {
+    if (this.stunWarn > 0 && !frozen) {
       this.stunWarn = Math.max(0, this.stunWarn - dt);
       if (this.stunWarn === 0) {
         // trigger actual stun
@@ -552,9 +640,11 @@ export class GameEngine {
 
     this.buffer = this.buffer.filter((b) => this.elapsed - b.t < INPUT_BUFFER_TIME);
     this.updatePlayer(dt);
-    this.updateEnemies(dt);
-    this.updateBullets(dt);
-    this.updateHazards(dt);
+    if (!frozen) this.updateEnemies(dt);
+    if (!frozen) this.updateBullets(dt);
+    if (!frozen) this.updateHazards(dt);
+    this.updateGrenades(dt, frozen);
+    this.updateFloats(dt);
     this.updateParticles(dt);
     this.updatePickups();
     this.checkCollisions();
@@ -685,15 +775,30 @@ export class GameEngine {
       }
     }
 
+    const der = derive(this.upgrades);
     if (p.shootCd === 0 && p.stunned === 0 && this.consumeBuffer("shoot")) {
       const aim = this.aimDir();
-      // sword tip distance ~ player radius + 30
       const tipDist = PLAYER_RADIUS + 30;
-      this.bullets.push({
-        pos: { x: p.pos.x + aim.x * tipDist, y: p.pos.y + aim.y * tipDist },
-        vel: { x: aim.x * BULLET_SPEED, y: aim.y * BULLET_SPEED },
-        life: 3.5, fromPlayer: true, damage: 1,
-      });
+      if (!der.bulletsEnabled) {
+        // bullets locked — play sword swing only (no projectile)
+        p.attackSwing = 1; p.facing = aim;
+        audio.play("sword");
+        p.shootCd = SHOOT_CD;
+      } else if (this.reloading > 0 || this.ammo <= 0) {
+        audio.play("noAmmo");
+        if (this.ammo <= 0 && this.reloading === 0) {
+          this.reloading = 1.2; audio.play("reload");
+        }
+        p.shootCd = SHOOT_CD;
+      } else {
+        this.bullets.push({
+          pos: { x: p.pos.x + aim.x * tipDist, y: p.pos.y + aim.y * tipDist },
+          vel: { x: aim.x * BULLET_SPEED, y: aim.y * BULLET_SPEED },
+          life: 3.5, fromPlayer: true, damage: der.bulletDamage,
+        });
+        this.ammo -= 1;
+        audio.play("shoot");
+        if (this.ammo <= 0) { this.reloading = 1.2; audio.play("reload"); }
       // muzzle flash particles at sword tip
       for (let i = 0; i < 8; i++) {
         const a = Math.atan2(aim.y, aim.x) + (Math.random() - 0.5) * 0.7;
@@ -704,11 +809,42 @@ export class GameEngine {
           life: 0.25, maxLife: 0.25, color: "#00ffaa", size: 2 + Math.random() * 2,
         });
       }
-      p.shootCd = SHOOT_CD;
-      p.facing = aim;
-      p.attackSwing = 1;
-      this.m.shotsFired++;
-      p.scaleX = 1.25; p.scaleY = 0.88;
+        p.shootCd = SHOOT_CD;
+        p.facing = aim;
+        p.attackSwing = 1;
+        this.m.shotsFired++;
+        p.scaleX = 1.25; p.scaleY = 0.88;
+      }
+    }
+
+    // Ability: time freeze
+    if (this.consumeBuffer("freeze") && this.freezeCharges > 0 && this.freezeActive === 0 && this.freezeCd === 0) {
+      this.freezeCharges--;
+      this.freezeActive = 5;
+      this.freezeCd = 0.5;
+      audio.play("freeze");
+      this.shake = Math.max(this.shake, 4);
+      this.spawnExplosion(p.pos.x, p.pos.y, "#88ddff", 28);
+      this.spawnFloat(p.pos.x, p.pos.y - 30, "TIME FREEZE", "#88ddff");
+    }
+    // Ability: grenade
+    if (this.consumeBuffer("grenade") && this.grenadeCharges > 0 && this.grenadeCd === 0) {
+      this.grenadeCharges--;
+      this.grenadeCd = 0.3;
+      const aim = this.aimDir();
+      const target = this.pointerWorld();
+      const travel = Math.min(1.2, Math.max(0.35, Math.hypot(target.x - p.pos.x, target.y - p.pos.y) / 520));
+      this.grenades.push({
+        pos: { x: p.pos.x + aim.x * (PLAYER_RADIUS + 4), y: p.pos.y + aim.y * (PLAYER_RADIUS + 4) },
+        vel: { x: aim.x * 520, y: aim.y * 520 },
+        life: travel, fuse: travel + 0.4, radius: 140, damage: 60,
+      });
+      audio.play("grenadeThrow");
+    }
+    // Reload (R)
+    if (this.consumeBuffer("reload") && der.bulletsEnabled && this.reloading === 0 && this.ammo < der.magazine) {
+      this.reloading = 1.2;
+      audio.play("reload");
     }
 
     if (this.pointerDown && p.shootCd === 0 && p.stunned === 0) {
@@ -1053,16 +1189,108 @@ export class GameEngine {
       const dx = this.player.pos.x - pk.pos.x;
       const dy = this.player.pos.y - pk.pos.y;
       if (Math.hypot(dx, dy) < pk.r + PLAYER_RADIUS - 4) {
+        if (pk.kind === "chest") {
+          if (pk.opened) continue;
+          pk.opened = true;
+          pk.openTime = 0.6;
+          const reward = pk.loot ?? 30;
+          this.currency += reward;
+          audio.play("chestOpen");
+          audio.play("coin");
+          this.spawnExplosion(pk.pos.x, pk.pos.y, pk.rarity === "epic" ? "#ffaa44" : pk.rarity === "rare" ? "#9d4dff" : "#00ffaa", 18);
+          this.spawnFloat(pk.pos.x, pk.pos.y - 24, `+${reward}¢ ${(pk.rarity ?? "").toUpperCase()}`, pk.rarity === "epic" ? "#ffaa44" : pk.rarity === "rare" ? "#c08bff" : "#00ffaa");
+          this.onEvent({ type: "currency", amount: reward, total: this.currency });
+          continue;
+        }
         pk.taken = true;
         if (pk.kind === "heal" && !this.player.healUsed) {
           this.player.healUsed = true;
           this.player.hp = this.player.maxHp;
           this.spawnExplosion(this.player.pos.x, this.player.pos.y, "#00ffaa", 30);
+          audio.play("heal");
           this.onEvent({ type: "trace", msg: "MED-CORE consumed: HP restored to 100%." });
         }
       }
     }
-    this.pickups = this.pickups.filter((p) => !p.taken);
+    // Remove only consumed heal pickups; keep opened chests for visual feedback briefly.
+    this.pickups = this.pickups.filter((p) => {
+      if (p.kind === "heal") return !p.taken;
+      if (p.kind === "chest" && p.opened) {
+        p.openTime = (p.openTime ?? 0.6) - 0.016;
+        return (p.openTime ?? 0) > -1.2; // stays for ~1.2s as a hollow shell
+      }
+      return true;
+    });
+  }
+
+  private updateGrenades(dt: number, frozen: boolean) {
+    for (const gr of this.grenades) {
+      if (frozen) continue;
+      // travel arc
+      if (gr.life > 0) {
+        gr.pos.x += gr.vel.x * dt;
+        gr.pos.y += gr.vel.y * dt;
+        gr.life -= dt;
+        // wall collision halts travel and starts fuse
+        for (const w of this.walls) {
+          if (gr.pos.x > w.x && gr.pos.x < w.x + w.w && gr.pos.y > w.y && gr.pos.y < w.y + w.h) {
+            gr.vel.x = 0; gr.vel.y = 0; gr.life = 0;
+            break;
+          }
+        }
+        if (gr.life <= 0) { gr.vel.x = 0; gr.vel.y = 0; }
+      }
+      gr.fuse -= dt;
+    }
+    // detonate
+    const remaining: Grenade[] = [];
+    for (const gr of this.grenades) {
+      if (gr.fuse <= 0) {
+        this.detonateGrenade(gr);
+      } else remaining.push(gr);
+    }
+    this.grenades = remaining;
+  }
+
+  private detonateGrenade(gr: Grenade) {
+    audio.play("explosion");
+    this.shake = Math.max(this.shake, 14);
+    this.spawnExplosion(gr.pos.x, gr.pos.y, "#ffaa44", 50);
+    this.spawnExplosion(gr.pos.x, gr.pos.y, "#ff5522", 30);
+    // damage enemies in radius (bypass shield bubble)
+    for (const e of this.enemies) {
+      const d = Math.hypot(e.pos.x - gr.pos.x, e.pos.y - gr.pos.y);
+      if (d < gr.radius + e.radius) {
+        const fall = 1 - Math.min(1, d / gr.radius);
+        const dmg = Math.round(gr.damage * (0.5 + fall * 0.5));
+        e.hp -= dmg;
+        e.hitFlash = 0.15;
+        this.m.damageDealt += dmg;
+        if (e.hp <= 0) this.killEnemy(e);
+      }
+    }
+    // self-damage if too close
+    const pd = Math.hypot(this.player.pos.x - gr.pos.x, this.player.pos.y - gr.pos.y);
+    if (pd < gr.radius * 0.6 && this.player.iFrames === 0) {
+      this.damagePlayer(20);
+    }
+  }
+
+  private updateFloats(dt: number) {
+    for (const f of this.floats) {
+      f.pos.x += f.vel.x * dt;
+      f.pos.y += f.vel.y * dt;
+      f.life -= dt;
+      f.vel.y -= dt * 24; // gentle rise
+    }
+    this.floats = this.floats.filter((f) => f.life > 0);
+  }
+
+  private spawnFloat(x: number, y: number, text: string, color: string) {
+    this.floats.push({
+      pos: { x, y }, vel: { x: 0, y: -10 },
+      life: 1.4, maxLife: 1.4, text, color, size: 14,
+    });
   }
 
   private laserActive(h: Extract<Hazard, { kind: "laser" }>) {
@@ -1221,6 +1449,29 @@ function dist2(a: Vec, b: Vec) { const dx = a.x - b.x, dy = a.y - b.y; return dx
 function normalize(v: Vec): Vec { const l = Math.hypot(v.x, v.y) || 1; return { x: v.x / l, y: v.y / l }; }
 function pointInRect(p: Vec, r: { x: number; y: number; w: number; h: number }) {
   return p.x > r.x && p.x < r.x + r.w && p.y > r.y && p.y < r.y + r.h;
+}
+function clamp(v: number, lo: number, hi: number) { return Math.max(lo, Math.min(hi, v)); }
+
+function rollGroupWeighted(
+  size: number,
+  w: { slasher: number; shooter: number; shield: number; sniper: number },
+  rng: () => number,
+): EnemyClass[] {
+  const total = w.slasher + w.shooter + w.shield + w.sniper || 1;
+  const ns = Math.round((w.slasher / total) * size);
+  const nS = Math.round((w.shooter / total) * size);
+  const nh = Math.round((w.shield  / total) * size);
+  const nn = Math.max(0, size - ns - nS - nh);
+  const out: EnemyClass[] = [];
+  for (let i = 0; i < ns; i++) out.push("slasher");
+  for (let i = 0; i < nS; i++) out.push("shooter");
+  for (let i = 0; i < nh; i++) out.push("shield");
+  for (let i = 0; i < nn; i++) out.push("sniper");
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
 }
 function predictAim(from: Vec, target: Vec, targetVel: Vec, bulletSpeed: number): Vec {
   const dx = target.x - from.x;

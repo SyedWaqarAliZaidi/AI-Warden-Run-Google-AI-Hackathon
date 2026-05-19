@@ -30,6 +30,17 @@ const LevelConfigSchema = z.object({
   bossPhase: z.enum(["telegraph", "sweep", "rush", "predict"]).optional(),
   taunt: z.string().max(160),
   reasoning: z.array(z.string().max(180)).min(2).max(6),
+  groupPlan: z.object({
+    groupCount: z.number().int().min(1).max(6),
+    groupSizes: z.array(z.number().int().min(2).max(20)).min(1).max(6),
+    weights: z.object({
+      slasher: z.number().min(0).max(1),
+      shooter: z.number().min(0).max(1),
+      shield:  z.number().min(0).max(1),
+      sniper:  z.number().min(0).max(1),
+    }),
+    chestCount: z.number().int().min(0).max(8),
+  }).optional(),
 });
 export type LevelConfig = z.infer<typeof LevelConfigSchema>;
 
@@ -76,6 +87,14 @@ function fallbackConfig(level: number, m: PlayerMetrics | null): LevelConfig {
         : "Player favors ranged fire → deploying shield drones.",
       `Spawn pattern: ${level === 4 ? "boss arena" : "adaptive scatter"}.`,
     ],
+    groupPlan: level === 4 ? undefined : {
+      groupCount: level === 1 ? 2 : level === 2 ? 3 : 4,
+      groupSizes: Array(level === 1 ? 2 : level === 2 ? 3 : 4).fill(6 + level),
+      weights: dashHeavy
+        ? { slasher: 0.20, shooter: 0.40, shield: 0.30, sniper: 0.10 }
+        : { slasher: 0.40, shooter: 0.20, shield: 0.20, sniper: 0.20 },
+      chestCount: 3 + level,
+    },
   };
 }
 
@@ -100,7 +119,15 @@ Level themes (you MUST respect):
 - 3 "Deep Sub-Systems": elite enemies that COUNTER the player's dominant tactic (anti_dash vs dash-heavy, shield_drone vs shot-heavy).
 - 4 "The Core Mainframe": boss arena. Set bossPhase to "predict" if accuracy>0.4 else "sweep". Use 1-3 enemies as adds.
 
-Difficulty must scale with clear speed and remaining HP. Be theatrical in 'taunt'.`;
+Difficulty must scale with clear speed and remaining HP. Be theatrical in 'taunt'.
+
+ALSO output a 'groupPlan' (skip only for level 4) that decides ENEMY ORCHESTRATION:
+- groupCount: how many enemy squads to spawn across the map (1-6).
+- groupSizes: array (length == groupCount), each = how many enemies in that squad (2-16). Scale with level/difficulty.
+- weights: class composition ratios that MUST sum approximately to 1.0. Allowed ranges:
+    slasher 0.30-0.45, shooter 0.20-0.35, shield 0.15-0.25, sniper 0.10-0.20.
+    Bias the mix to counter the player: dash-heavy → more shooter+shield (kite + tank); shot-heavy → more shield+slasher (close the gap + soak).
+- chestCount: 2-6 loot chests scattered for reward pacing. Easy levels = more chests, hard = fewer.`;
 
       const prompt = `Current request: configure level ${data.level}.
 Player metrics from previous level (null = none yet): ${JSON.stringify(data.metrics)}.

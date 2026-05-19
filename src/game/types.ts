@@ -91,10 +91,35 @@ export type Player = {
 };
 
 export type Pickup = {
-  kind: "heal";
+  kind: "heal" | "chest";
   pos: Vec;
   r: number;
   taken: boolean;
+  /** chest loot in currency (rolled at spawn) */
+  loot?: number;
+  /** chest rarity: common / rare / epic */
+  rarity?: "common" | "rare" | "epic";
+  opened?: boolean;
+  openTime?: number;
+};
+
+export type Grenade = {
+  pos: Vec;
+  vel: Vec;
+  life: number;       // travel time remaining
+  fuse: number;       // seconds until detonation
+  radius: number;     // explosion radius
+  damage: number;
+};
+
+export type FloatingText = {
+  pos: Vec;
+  vel: Vec;
+  life: number;
+  maxLife: number;
+  text: string;
+  color: string;
+  size: number;
 };
 
 export type Difficulty = "easy" | "medium" | "hard" | "nightmare";
