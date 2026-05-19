@@ -1189,16 +1189,108 @@ export class GameEngine {
       const dx = this.player.pos.x - pk.pos.x;
       const dy = this.player.pos.y - pk.pos.y;
       if (Math.hypot(dx, dy) < pk.r + PLAYER_RADIUS - 4) {
+        if (pk.kind === "chest") {
+          if (pk.opened) continue;
+          pk.opened = true;
+          pk.openTime = 0.6;
+          const reward = pk.loot ?? 30;
+          this.currency += reward;
+          audio.play("chestOpen");
+          audio.play("coin");
+          this.spawnExplosion(pk.pos.x, pk.pos.y, pk.rarity === "epic" ? "#ffaa44" : pk.rarity === "rare" ? "#9d4dff" : "#00ffaa", 18);
+          this.spawnFloat(pk.pos.x, pk.pos.y - 24, `+${reward}¢ ${(pk.rarity ?? "").toUpperCase()}`, pk.rarity === "epic" ? "#ffaa44" : pk.rarity === "rare" ? "#c08bff" : "#00ffaa");
+          this.onEvent({ type: "currency", amount: reward, total: this.currency });
+          continue;
+        }
         pk.taken = true;
         if (pk.kind === "heal" && !this.player.healUsed) {
           this.player.healUsed = true;
           this.player.hp = this.player.maxHp;
           this.spawnExplosion(this.player.pos.x, this.player.pos.y, "#00ffaa", 30);
+          audio.play("heal");
           this.onEvent({ type: "trace", msg: "MED-CORE consumed: HP restored to 100%." });
         }
       }
     }
-    this.pickups = this.pickups.filter((p) => !p.taken);
+    // Remove only consumed heal pickups; keep opened chests for visual feedback briefly.
+    this.pickups = this.pickups.filter((p) => {
+      if (p.kind === "heal") return !p.taken;
+      if (p.kind === "chest" && p.opened) {
+        p.openTime = (p.openTime ?? 0.6) - 0.016;
+        return (p.openTime ?? 0) > -1.2; // stays for ~1.2s as a hollow shell
+      }
+      return true;
+    });
+  }
+
+  private updateGrenades(dt: number, frozen: boolean) {
+    for (const gr of this.grenades) {
+      if (frozen) continue;
+      // travel arc
+      if (gr.life > 0) {
+        gr.pos.x += gr.vel.x * dt;
+        gr.pos.y += gr.vel.y * dt;
+        gr.life -= dt;
+        // wall collision halts travel and starts fuse
+        for (const w of this.walls) {
+          if (gr.pos.x > w.x && gr.pos.x < w.x + w.w && gr.pos.y > w.y && gr.pos.y < w.y + w.h) {
+            gr.vel.x = 0; gr.vel.y = 0; gr.life = 0;
+            break;
+          }
+        }
+        if (gr.life <= 0) { gr.vel.x = 0; gr.vel.y = 0; }
+      }
+      gr.fuse -= dt;
+    }
+    // detonate
+    const remaining: Grenade[] = [];
+    for (const gr of this.grenades) {
+      if (gr.fuse <= 0) {
+        this.detonateGrenade(gr);
+      } else remaining.push(gr);
+    }
+    this.grenades = remaining;
+  }
+
+  private detonateGrenade(gr: Grenade) {
+    audio.play("explosion");
+    this.shake = Math.max(this.shake, 14);
+    this.spawnExplosion(gr.pos.x, gr.pos.y, "#ffaa44", 50);
+    this.spawnExplosion(gr.pos.x, gr.pos.y, "#ff5522", 30);
+    // damage enemies in radius (bypass shield bubble)
+    for (const e of this.enemies) {
+      const d = Math.hypot(e.pos.x - gr.pos.x, e.pos.y - gr.pos.y);
+      if (d < gr.radius + e.radius) {
+        const fall = 1 - Math.min(1, d / gr.radius);
+        const dmg = Math.round(gr.damage * (0.5 + fall * 0.5));
+        e.hp -= dmg;
+        e.hitFlash = 0.15;
+        this.m.damageDealt += dmg;
+        if (e.hp <= 0) this.killEnemy(e);
+      }
+    }
+    // self-damage if too close
+    const pd = Math.hypot(this.player.pos.x - gr.pos.x, this.player.pos.y - gr.pos.y);
+    if (pd < gr.radius * 0.6 && this.player.iFrames === 0) {
+      this.damagePlayer(20);
+    }
+  }
+
+  private updateFloats(dt: number) {
+    for (const f of this.floats) {
+      f.pos.x += f.vel.x * dt;
+      f.pos.y += f.vel.y * dt;
+      f.life -= dt;
+      f.vel.y -= dt * 24; // gentle rise
+    }
+    this.floats = this.floats.filter((f) => f.life > 0);
+  }
+
+  private spawnFloat(x: number, y: number, text: string, color: string) {
+    this.floats.push({
+      pos: { x, y }, vel: { x: 0, y: -10 },
+      life: 1.4, maxLife: 1.4, text, color, size: 14,
+    });
   }
 
   private laserActive(h: Extract<Hazard, { kind: "laser" }>) {
