@@ -4,6 +4,7 @@ import { GameEngine, VIEW_W, VIEW_H, type GameEvent } from "@/game/engine";
 import { render } from "@/game/render";
 import { DIFFICULTY_PRESETS, LEVEL_TIME_LIMITS, type Difficulty } from "@/game/types";
 import { audio } from "@/lib/audio";
+import { UPGRADES, derive, type UpgradeId } from "@/game/upgrades";
 import {
   requestWardenConfig,
   validateRun,
@@ -42,6 +43,14 @@ export function WardenGame() {
   const [stunWarn, setStunWarn] = useState(0);
   const [healUsed, setHealUsed] = useState(false);
   const [deathReason, setDeathReason] = useState<string | null>(null);
+  const [currency, setCurrency] = useState(0);
+  const [ammo, setAmmo] = useState(10);
+  const [magazine, setMagazine] = useState(10);
+  const [reloading, setReloading] = useState(0);
+  const [freezeCharges, setFreezeCharges] = useState(0);
+  const [grenadeCharges, setGrenadeCharges] = useState(0);
+  const [freezeActive, setFreezeActive] = useState(false);
+  const [upgradesVer, setUpgradesVer] = useState(0); // bump to re-render shop
   const traceIdRef = useRef(0);
 
   const callWarden = useServerFn(requestWardenConfig);
@@ -86,6 +95,13 @@ export function WardenGame() {
           setHealUsed(g.player.healUsed);
           setBlindActive(g.blindActive > 0);
           setStunWarn(g.stunWarn);
+          setCurrency(g.currency);
+          setAmmo(g.ammo);
+          setMagazine(derive(g.upgrades).magazine);
+          setReloading(g.reloading);
+          setFreezeCharges(g.freezeCharges);
+          setGrenadeCharges(g.grenadeCharges);
+          setFreezeActive(g.freezeActive > 0);
           const boss = g.enemies.find((e) => e.isBoss);
           if (boss) setBossPhase((boss.bossPhase ?? 1) as 1 | 2);
         }
@@ -102,8 +118,11 @@ export function WardenGame() {
     if (!g) return;
     const onDown = (e: KeyboardEvent) => {
       const k = e.key.toLowerCase();
-      if (["w", "a", "s", "d", "arrowup", "arrowdown", "arrowleft", "arrowright", " "].includes(k)) e.preventDefault();
+      if (["w","a","s","d","arrowup","arrowdown","arrowleft","arrowright"," ","q","e","r"].includes(k)) e.preventDefault();
       if (k === " " || k === "shift") g.pressAction("dash");
+      else if (k === "q") g.pressAction("freeze");
+      else if (k === "e") g.pressAction("grenade");
+      else if (k === "r") g.pressAction("reload");
       else g.keys.add(k);
     };
     const onUp = (e: KeyboardEvent) => g.keys.delete(e.key.toLowerCase());
@@ -192,6 +211,12 @@ export function WardenGame() {
     setLastMetrics(null);
     setRefereeMsg(null);
     setDeathReason(null);
+    // Fresh run: reset progression
+    if (engineRef.current) {
+      engineRef.current.currency = 0;
+      engineRef.current.upgrades = { hp: 0, sword: 0, bullet: 0, capacity: 0, freeze: 0, grenade: 0 };
+    }
+    setUpgradesVer((v) => v + 1);
     startLevel(1, null);
   };
   const nextLevel = () => { if (lastMetrics) startLevel(lastMetrics.level + 1, lastMetrics); };
