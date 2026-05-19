@@ -15,10 +15,14 @@ export function render(ctx: CanvasRenderingContext2D, g: GameEngine) {
   drawExitGate(ctx, g);
   drawHazards(ctx, g);
   drawPickups(ctx, g);
+  drawChests(ctx, g);
+  drawGrenades(ctx, g);
   drawParticles(ctx, g);
   drawBullets(ctx, g);
   drawEnemies(ctx, g);
   drawPlayer(ctx, g);
+  drawFloats(ctx, g);
+  if (g.freezeActive > 0) drawFreezeOverlay(ctx, g);
   // stun warning telegraph
   if (g.stunWarn > 0) drawStunWarning(ctx, g);
 
@@ -340,6 +344,98 @@ function drawEnemies(ctx: CanvasRenderingContext2D, g: GameEngine) {
     else if (e.cls === "shield") drawShield(ctx, e);
     else drawDrone(ctx, e);
   }
+}
+
+function drawChests(ctx: CanvasRenderingContext2D, g: GameEngine) {
+  const t = performance.now() / 1000;
+  for (const pk of g.pickups) {
+    if (pk.kind !== "chest") continue;
+    const color = pk.rarity === "epic" ? "#ffaa44" : pk.rarity === "rare" ? "#c08bff" : "#00ffaa";
+    const opened = !!pk.opened;
+    ctx.save();
+    ctx.translate(pk.pos.x, pk.pos.y);
+    const pulse = 0.5 + Math.sin(t * 3) * 0.5;
+    if (!opened) {
+      ctx.shadowColor = color; ctx.shadowBlur = 14 + pulse * 8;
+      ctx.strokeStyle = color; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(0, 0, pk.r + 6 + pulse * 3, 0, Math.PI * 2); ctx.stroke();
+    }
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = opened ? "#1a1a24" : "#1a1f30";
+    ctx.strokeStyle = color; ctx.lineWidth = 2;
+    ctx.fillRect(-16, -12, 32, 22);
+    ctx.strokeRect(-16, -12, 32, 22);
+    // lid
+    const lidAng = opened ? -0.6 : 0;
+    ctx.save(); ctx.translate(-16, -12); ctx.rotate(lidAng);
+    ctx.fillStyle = "#0d1020"; ctx.strokeStyle = color;
+    ctx.fillRect(0, -8, 32, 10); ctx.strokeRect(0, -8, 32, 10);
+    ctx.restore();
+    // lock / glow core
+    ctx.fillStyle = color; ctx.shadowColor = color; ctx.shadowBlur = 8;
+    ctx.fillRect(-3, -3, 6, 6);
+    ctx.shadowBlur = 0;
+    if (!opened) {
+      ctx.fillStyle = color; ctx.font = "9px monospace"; ctx.textAlign = "center";
+      ctx.fillText((pk.rarity ?? "common").toUpperCase(), 0, 24);
+    }
+    ctx.restore();
+  }
+}
+
+function drawGrenades(ctx: CanvasRenderingContext2D, g: GameEngine) {
+  for (const gr of g.grenades) {
+    const blink = gr.fuse < 0.5 ? (Math.floor(performance.now() / 80) % 2 === 0) : false;
+    ctx.save();
+    ctx.translate(gr.pos.x, gr.pos.y);
+    ctx.fillStyle = blink ? "#fff" : "#ffaa44";
+    ctx.shadowColor = "#ffaa44"; ctx.shadowBlur = 14;
+    ctx.beginPath(); ctx.arc(0, 0, 8, 0, Math.PI * 2); ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = "#ff5522"; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(0, 0, 8, 0, Math.PI * 2); ctx.stroke();
+    // blast radius hint
+    ctx.strokeStyle = "rgba(255,170,68,0.2)"; ctx.setLineDash([4, 6]);
+    ctx.beginPath(); ctx.arc(0, 0, gr.radius, 0, Math.PI * 2); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
+  }
+}
+
+function drawFloats(ctx: CanvasRenderingContext2D, g: GameEngine) {
+  for (const f of g.floats) {
+    const a = Math.max(0, f.life / f.maxLife);
+    ctx.globalAlpha = a;
+    ctx.fillStyle = f.color;
+    ctx.font = `bold ${f.size}px monospace`;
+    ctx.textAlign = "center";
+    ctx.shadowColor = f.color; ctx.shadowBlur = 8;
+    ctx.fillText(f.text, f.pos.x, f.pos.y);
+    ctx.shadowBlur = 0;
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawFreezeOverlay(ctx: CanvasRenderingContext2D, g: GameEngine) {
+  ctx.save();
+  ctx.fillStyle = "rgba(136,221,255,0.08)";
+  ctx.fillRect(g.cam.x, g.cam.y, VIEW_W, VIEW_H);
+  // ice crystals around player
+  const t = performance.now() / 1000;
+  ctx.strokeStyle = "rgba(136,221,255,0.7)"; ctx.lineWidth = 1.5;
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * Math.PI * 2 + t * 0.5;
+    const r = 60 + Math.sin(t * 2 + i) * 8;
+    const x = g.player.pos.x + Math.cos(a) * r;
+    const y = g.player.pos.y + Math.sin(a) * r;
+    ctx.beginPath();
+    ctx.moveTo(x - 4, y); ctx.lineTo(x + 4, y);
+    ctx.moveTo(x, y - 4); ctx.lineTo(x, y + 4);
+    ctx.moveTo(x - 3, y - 3); ctx.lineTo(x + 3, y + 3);
+    ctx.moveTo(x - 3, y + 3); ctx.lineTo(x + 3, y - 3);
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 
 // ============ PLAYER (DARK AI KNIGHT) ============
