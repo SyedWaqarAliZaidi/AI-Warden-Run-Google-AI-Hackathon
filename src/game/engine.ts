@@ -775,15 +775,30 @@ export class GameEngine {
       }
     }
 
+    const der = derive(this.upgrades);
     if (p.shootCd === 0 && p.stunned === 0 && this.consumeBuffer("shoot")) {
       const aim = this.aimDir();
-      // sword tip distance ~ player radius + 30
       const tipDist = PLAYER_RADIUS + 30;
-      this.bullets.push({
-        pos: { x: p.pos.x + aim.x * tipDist, y: p.pos.y + aim.y * tipDist },
-        vel: { x: aim.x * BULLET_SPEED, y: aim.y * BULLET_SPEED },
-        life: 3.5, fromPlayer: true, damage: 1,
-      });
+      if (!der.bulletsEnabled) {
+        // bullets locked — play sword swing only (no projectile)
+        p.attackSwing = 1; p.facing = aim;
+        audio.play("sword");
+        p.shootCd = SHOOT_CD;
+      } else if (this.reloading > 0 || this.ammo <= 0) {
+        audio.play("noAmmo");
+        if (this.ammo <= 0 && this.reloading === 0) {
+          this.reloading = 1.2; audio.play("reload");
+        }
+        p.shootCd = SHOOT_CD;
+      } else {
+        this.bullets.push({
+          pos: { x: p.pos.x + aim.x * tipDist, y: p.pos.y + aim.y * tipDist },
+          vel: { x: aim.x * BULLET_SPEED, y: aim.y * BULLET_SPEED },
+          life: 3.5, fromPlayer: true, damage: der.bulletDamage,
+        });
+        this.ammo -= 1;
+        audio.play("shoot");
+        if (this.ammo <= 0) { this.reloading = 1.2; audio.play("reload"); }
       // muzzle flash particles at sword tip
       for (let i = 0; i < 8; i++) {
         const a = Math.atan2(aim.y, aim.x) + (Math.random() - 0.5) * 0.7;
@@ -794,11 +809,42 @@ export class GameEngine {
           life: 0.25, maxLife: 0.25, color: "#00ffaa", size: 2 + Math.random() * 2,
         });
       }
-      p.shootCd = SHOOT_CD;
-      p.facing = aim;
-      p.attackSwing = 1;
-      this.m.shotsFired++;
-      p.scaleX = 1.25; p.scaleY = 0.88;
+        p.shootCd = SHOOT_CD;
+        p.facing = aim;
+        p.attackSwing = 1;
+        this.m.shotsFired++;
+        p.scaleX = 1.25; p.scaleY = 0.88;
+      }
+    }
+
+    // Ability: time freeze
+    if (this.consumeBuffer("freeze") && this.freezeCharges > 0 && this.freezeActive === 0 && this.freezeCd === 0) {
+      this.freezeCharges--;
+      this.freezeActive = 5;
+      this.freezeCd = 0.5;
+      audio.play("freeze");
+      this.shake = Math.max(this.shake, 4);
+      this.spawnExplosion(p.pos.x, p.pos.y, "#88ddff", 28);
+      this.spawnFloat(p.pos.x, p.pos.y - 30, "TIME FREEZE", "#88ddff");
+    }
+    // Ability: grenade
+    if (this.consumeBuffer("grenade") && this.grenadeCharges > 0 && this.grenadeCd === 0) {
+      this.grenadeCharges--;
+      this.grenadeCd = 0.3;
+      const aim = this.aimDir();
+      const target = this.pointerWorld();
+      const travel = Math.min(1.2, Math.max(0.35, Math.hypot(target.x - p.pos.x, target.y - p.pos.y) / 520));
+      this.grenades.push({
+        pos: { x: p.pos.x + aim.x * (PLAYER_RADIUS + 4), y: p.pos.y + aim.y * (PLAYER_RADIUS + 4) },
+        vel: { x: aim.x * 520, y: aim.y * 520 },
+        life: travel, fuse: travel + 0.4, radius: 140, damage: 60,
+      });
+      audio.play("grenadeThrow");
+    }
+    // Reload (R)
+    if (this.consumeBuffer("reload") && der.bulletsEnabled && this.reloading === 0 && this.ammo < der.magazine) {
+      this.reloading = 1.2;
+      audio.play("reload");
     }
 
     if (this.pointerDown && p.shootCd === 0 && p.stunned === 0) {
