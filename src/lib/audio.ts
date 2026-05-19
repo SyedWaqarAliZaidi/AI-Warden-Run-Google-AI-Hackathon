@@ -5,7 +5,9 @@ export type SfxName =
   | "shoot" | "dash" | "hit" | "death" | "heal" | "sword"
   | "enemyShoot" | "enemySlash" | "shieldUp" | "sniperCharge" | "enemyDie"
   | "trap" | "gate" | "tick" | "victory" | "timeout" | "menu" | "pause"
-  | "bossSpawn" | "bossSlam";
+  | "bossSpawn" | "bossSlam"
+  | "chestOpen" | "coin" | "freeze" | "freezeEnd" | "grenadeThrow" | "explosion"
+  | "upgradeClick" | "upgradeBuy" | "upgradeFail" | "reload" | "noAmmo";
 
 class AudioBus {
   ctx: AudioContext | null = null;
@@ -233,6 +235,111 @@ class AudioBus {
         const f = ctx.createBiquadFilter(); f.type = "lowpass"; f.frequency.value = 250;
         const g = ctx.createGain(); g.gain.setValueAtTime(0.45, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.4);
         src.connect(f).connect(g).connect(out); src.start(t);
+        break;
+      }
+      case "chestOpen": {
+        // metallic clink + chime
+        for (let i = 0; i < 4; i++) {
+          const o = ctx.createOscillator(); const g = ctx.createGain();
+          o.type = "triangle"; o.frequency.value = 660 * Math.pow(1.18, i);
+          g.gain.setValueAtTime(0, t + i * 0.05); g.gain.linearRampToValueAtTime(0.14, t + i * 0.05 + 0.01);
+          g.gain.exponentialRampToValueAtTime(0.001, t + i * 0.05 + 0.35);
+          o.connect(g).connect(out); o.start(t + i * 0.05); o.stop(t + i * 0.05 + 0.4);
+        }
+        break;
+      }
+      case "coin": {
+        if (!this.canFire("coin", 30)) return;
+        const o = ctx.createOscillator(); const g = ctx.createGain();
+        o.type = "triangle"; o.frequency.setValueAtTime(1320, t); o.frequency.linearRampToValueAtTime(1760, t + 0.06);
+        g.gain.setValueAtTime(0.14, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
+        o.connect(g).connect(out); o.start(t); o.stop(t + 0.2);
+        break;
+      }
+      case "freeze": {
+        // descending crystalline whoosh
+        for (let i = 0; i < 5; i++) {
+          const o = ctx.createOscillator(); const g = ctx.createGain();
+          o.type = "sine"; o.frequency.setValueAtTime(1200 - i * 80, t + i * 0.04);
+          o.frequency.exponentialRampToValueAtTime(200, t + i * 0.04 + 0.5);
+          g.gain.setValueAtTime(0.12, t + i * 0.04); g.gain.exponentialRampToValueAtTime(0.001, t + i * 0.04 + 0.55);
+          o.connect(g).connect(out); o.start(t + i * 0.04); o.stop(t + i * 0.04 + 0.6);
+        }
+        // noise burst
+        const noise = this.noiseBuffer(0.5);
+        const src = ctx.createBufferSource(); src.buffer = noise;
+        const f = ctx.createBiquadFilter(); f.type = "highpass"; f.frequency.value = 2400;
+        const ng = ctx.createGain(); ng.gain.setValueAtTime(0.18, t); ng.gain.exponentialRampToValueAtTime(0.001, t + 0.6);
+        src.connect(f).connect(ng).connect(out); src.start(t);
+        break;
+      }
+      case "freezeEnd": {
+        const o = ctx.createOscillator(); const g = ctx.createGain();
+        o.type = "sine"; o.frequency.setValueAtTime(220, t); o.frequency.linearRampToValueAtTime(880, t + 0.25);
+        g.gain.setValueAtTime(0.18, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
+        o.connect(g).connect(out); o.start(t); o.stop(t + 0.32);
+        break;
+      }
+      case "grenadeThrow": {
+        const o = ctx.createOscillator(); const g = ctx.createGain();
+        o.type = "triangle"; o.frequency.setValueAtTime(420, t); o.frequency.exponentialRampToValueAtTime(160, t + 0.25);
+        g.gain.setValueAtTime(0.14, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
+        o.connect(g).connect(out); o.start(t); o.stop(t + 0.32);
+        break;
+      }
+      case "explosion": {
+        const noise = this.noiseBuffer(0.6);
+        const src = ctx.createBufferSource(); src.buffer = noise;
+        const f = ctx.createBiquadFilter(); f.type = "lowpass"; f.frequency.setValueAtTime(800, t);
+        f.frequency.exponentialRampToValueAtTime(120, t + 0.5);
+        const g = ctx.createGain(); g.gain.setValueAtTime(0.5, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.6);
+        src.connect(f).connect(g).connect(out); src.start(t);
+        // sub-thud
+        const o = ctx.createOscillator(); const og = ctx.createGain();
+        o.type = "sine"; o.frequency.setValueAtTime(80, t); o.frequency.exponentialRampToValueAtTime(30, t + 0.3);
+        og.gain.setValueAtTime(0.4, t); og.gain.exponentialRampToValueAtTime(0.001, t + 0.4);
+        o.connect(og).connect(out); o.start(t); o.stop(t + 0.45);
+        break;
+      }
+      case "upgradeClick": {
+        if (!this.canFire("uclick", 30)) return;
+        const o = ctx.createOscillator(); const g = ctx.createGain();
+        o.type = "square"; o.frequency.value = 660;
+        g.gain.setValueAtTime(0.05, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.05);
+        o.connect(g).connect(out); o.start(t); o.stop(t + 0.06);
+        break;
+      }
+      case "upgradeBuy": {
+        const notes = [523, 784, 1047];
+        notes.forEach((f, i) => {
+          const o = ctx.createOscillator(); const g = ctx.createGain();
+          o.type = "triangle"; o.frequency.value = f;
+          g.gain.setValueAtTime(0, t + i * 0.06); g.gain.linearRampToValueAtTime(0.16, t + i * 0.06 + 0.01);
+          g.gain.exponentialRampToValueAtTime(0.001, t + i * 0.06 + 0.3);
+          o.connect(g).connect(out); o.start(t + i * 0.06); o.stop(t + i * 0.06 + 0.32);
+        });
+        break;
+      }
+      case "upgradeFail": {
+        const o = ctx.createOscillator(); const g = ctx.createGain();
+        o.type = "square"; o.frequency.setValueAtTime(220, t); o.frequency.exponentialRampToValueAtTime(80, t + 0.2);
+        g.gain.setValueAtTime(0.16, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.22);
+        o.connect(g).connect(out); o.start(t); o.stop(t + 0.25);
+        break;
+      }
+      case "reload": {
+        const o = ctx.createOscillator(); const g = ctx.createGain();
+        o.type = "square"; o.frequency.setValueAtTime(160, t); o.frequency.linearRampToValueAtTime(440, t + 0.35);
+        g.gain.setValueAtTime(0.1, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.4);
+        o.connect(g).connect(out); o.start(t); o.stop(t + 0.42);
+        break;
+      }
+      case "noAmmo": {
+        if (!this.canFire("noammo", 200)) return;
+        const o = ctx.createOscillator(); const g = ctx.createGain();
+        o.type = "square"; o.frequency.value = 110;
+        g.gain.setValueAtTime(0.1, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
+        o.connect(g).connect(out); o.start(t); o.stop(t + 0.1);
         break;
       }
     }
