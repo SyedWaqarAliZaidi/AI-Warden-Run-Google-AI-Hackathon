@@ -1,9 +1,10 @@
 import type {
-  Bullet, Enemy, EnemyClass, Hazard, Particle, Pickup, Player, Vec, Wall, AnimState, Difficulty,
+  Bullet, Enemy, EnemyClass, Hazard, Particle, Pickup, Player, Vec, Wall, AnimState, Difficulty, Grenade, FloatingText,
 } from "./types";
 import { DIFFICULTY_PRESETS, LEVEL_TIME_LIMITS, SNIPER_MAX_ALIVE } from "./types";
 import type { LevelConfig, PlayerMetrics } from "@/lib/warden.functions";
 import { audio } from "@/lib/audio";
+import { derive, newUpgradeLevels, type UpgradeLevels } from "./upgrades";
 
 export const VIEW_W = 900;
 export const VIEW_H = 600;
@@ -22,7 +23,7 @@ const SHOOT_CD = 0.22;
 const BULLET_SPEED = 620;
 const INPUT_BUFFER_TIME = 0.12;
 
-type Action = "dash" | "shoot";
+type Action = "dash" | "shoot" | "freeze" | "grenade" | "reload";
 
 export type EngineState = "countdown" | "playing" | "victory" | "dead";
 
@@ -31,7 +32,8 @@ export type GameEvent =
   | { type: "metrics"; metrics: PlayerMetrics }
   | { type: "level_cleared"; metrics: PlayerMetrics }
   | { type: "death"; reason?: string }
-  | { type: "warden_taunt"; msg: string };
+  | { type: "warden_taunt"; msg: string }
+  | { type: "currency"; amount: number; total: number };
 
 const WORLD_SIZES: Record<number, { w: number; h: number }> = {
   1: { w: 3200, h: 2100 },
@@ -114,6 +116,8 @@ export class GameEngine {
   particles: Particle[] = [];
   walls: Wall[] = [];
   pickups: Pickup[] = [];
+  grenades: Grenade[] = [];
+  floats: FloatingText[] = [];
   level = 1;
   worldW = 1600;
   worldH = 1100;
@@ -131,6 +135,17 @@ export class GameEngine {
   blindActive = 0;         // seconds remaining
   stunWarn = 0;            // seconds left on warning telegraph (before stun)
   bossKilled = false;
+
+  // === Progression / abilities ===
+  upgrades: UpgradeLevels = newUpgradeLevels();
+  currency = 0;
+  ammo = 10;
+  reloading = 0;            // seconds remaining
+  freezeCharges = 0;
+  grenadeCharges = 0;
+  freezeActive = 0;         // seconds remaining of time-freeze
+  freezeCd = 0;             // small input cd between throws
+  grenadeCd = 0;
 
   m = {
     damageDealt: 0,
@@ -157,11 +172,12 @@ export class GameEngine {
 
   resetPlayer(fullReset: boolean) {
     const healUsed = fullReset ? false : this.player?.healUsed ?? false;
+    const d = derive(this.upgrades);
     this.player = {
       pos: { x: 220, y: this.worldH / 2 },
       vel: { x: 0, y: 0 },
-      hp: 100,
-      maxHp: 100,
+      hp: d.maxHp,
+      maxHp: d.maxHp,
       facing: { x: 1, y: 0 },
       dashCd: 0, dashTime: 0, iFrames: 0,
       shootCd: 0,
@@ -172,6 +188,13 @@ export class GameEngine {
       attackSwing: 0,
       healUsed,
     };
+    this.ammo = d.magazine;
+    this.reloading = 0;
+    this.freezeCharges = d.freezeMax;
+    this.grenadeCharges = d.grenadeMax;
+    this.freezeActive = 0;
+    this.freezeCd = 0;
+    this.grenadeCd = 0;
   }
 
   setDifficulty(d: Difficulty) {
@@ -191,6 +214,8 @@ export class GameEngine {
     this.particles = [];
     this.walls = [];
     this.pickups = [];
+    this.grenades = [];
+    this.floats = [];
     this.blindActive = 0;
     this.stunWarn = 0;
     this.bossKilled = false;
@@ -206,6 +231,7 @@ export class GameEngine {
     this.buildWalls();
     this.spawnEnemies(cfg);
     this.spawnHazards(cfg);
+    this.spawnChests(cfg);
     if (this.level === 4) {
       // healing item: far corner from boss
       this.pickups.push({ kind: "heal", pos: { x: 200, y: this.worldH - 200 }, r: 22, taken: false });
