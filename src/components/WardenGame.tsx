@@ -446,6 +446,7 @@ export function WardenGame() {
                   <span>HP left</span><span>{lastMetrics.hpRemaining}</span>
                 </div>
                 {refereeMsg && <div className="text-xs text-red-400 mb-3">{refereeMsg}</div>}
+                <UpgradeShop engineRef={engineRef} version={upgradesVer} bump={() => setUpgradesVer((v) => v + 1)} />
                 <button onClick={nextLevel} className="neon-btn">ENTER LEVEL {lastMetrics.level + 1}</button>
               </Overlay>
             )}
@@ -468,6 +469,7 @@ export function WardenGame() {
                 <p className="text-cyan-200/80 text-sm mb-4">
                   {deathReason ?? "The Warden compiled a counter to you."}
                 </p>
+                <UpgradeShop engineRef={engineRef} version={upgradesVer} bump={() => setUpgradesVer((v) => v + 1)} />
                 <div className="flex gap-3">
                   <button onClick={retry} className="neon-btn">RETRY LEVEL</button>
                   <button onClick={begin} className="neon-btn-outline">RESTART RUN</button>
@@ -475,6 +477,28 @@ export function WardenGame() {
               </Overlay>
             )}
           </div>
+
+          {/* === Ability / ammo / currency HUD === */}
+          {phase === "playing" && (
+            <div className="absolute bottom-3 left-3 pointer-events-none flex flex-col gap-1.5 text-[11px] font-mono">
+              <div className="flex gap-2 items-center bg-[#04060e]/85 border border-cyan-500/40 rounded px-2 py-1">
+                <span className="text-amber-300" style={{ textShadow: "0 0 6px #ffaa44" }}>¢ {currency}</span>
+              </div>
+              <div className="flex gap-2 items-center bg-[#04060e]/85 border border-cyan-500/40 rounded px-2 py-1">
+                <span className="text-cyan-300">AMMO</span>
+                <span className={reloading > 0 ? "text-amber-300 animate-pulse" : "text-cyan-100"}>
+                  {reloading > 0 ? "RELOADING" : `${ammo}/${magazine}`}
+                </span>
+                <span className="text-cyan-500/40 ml-1">[R]</span>
+              </div>
+              <div className="flex gap-2 items-center bg-[#04060e]/85 border border-cyan-500/40 rounded px-2 py-1">
+                <span className={freezeActive ? "text-sky-200 animate-pulse" : "text-sky-300"}>❄ {freezeCharges}</span>
+                <span className="text-cyan-500/40">[Q]</span>
+                <span className="text-amber-300 ml-2">✸ {grenadeCharges}</span>
+                <span className="text-cyan-500/40">[E]</span>
+              </div>
+            </div>
+          )}
 
           {/* Mobile controls */}
           <div className="lg:hidden mt-3 flex items-center justify-between gap-3 select-none">
@@ -487,13 +511,16 @@ export function WardenGame() {
               className="w-28 h-28 rounded-full border-2 border-cyan-500/50 bg-cyan-500/5 touch-none"
               style={{ boxShadow: "0 0 20px rgba(0,240,255,0.2)" }}
             />
-            <button
-              onPointerDown={() => engineRef.current?.pressAction("dash")}
-              className="w-20 h-20 rounded-full border-2 border-fuchsia-400/60 bg-fuchsia-500/10 text-fuchsia-200 font-bold tracking-widest"
-              style={{ boxShadow: "0 0 20px rgba(255,0,200,0.3)" }}
-            >
-              DASH
-            </button>
+            <div className="grid grid-cols-2 gap-2">
+              <button onPointerDown={() => engineRef.current?.pressAction("dash")}
+                className="w-16 h-16 rounded-full border-2 border-fuchsia-400/60 bg-fuchsia-500/10 text-fuchsia-200 font-bold text-xs">DASH</button>
+              <button onPointerDown={() => engineRef.current?.pressAction("shoot")}
+                className="w-16 h-16 rounded-full border-2 border-emerald-400/60 bg-emerald-500/10 text-emerald-200 font-bold text-xs">FIRE</button>
+              <button onPointerDown={() => engineRef.current?.pressAction("freeze")}
+                className="w-16 h-16 rounded-full border-2 border-sky-400/60 bg-sky-500/10 text-sky-200 font-bold text-xs">❄ {freezeCharges}</button>
+              <button onPointerDown={() => engineRef.current?.pressAction("grenade")}
+                className="w-16 h-16 rounded-full border-2 border-amber-400/60 bg-amber-500/10 text-amber-200 font-bold text-xs">✸ {grenadeCharges}</button>
+            </div>
           </div>
         </div>
 
