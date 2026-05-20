@@ -11,13 +11,13 @@ export type Hazard =
 
 export type Wall = {
   x: number; y: number; w: number; h: number;
-  kind: "wall" | "gate";
+  kind: "wall" | "gate" | "pillar" | "server" | "puzzle_terminal" | "locked_barrier";
   locked?: boolean;
 };
 
 export type AnimState = "idle" | "run" | "dash" | "hit" | "victory" | "attack";
 
-export type EnemyClass = "drone" | "shooter" | "sniper" | "slasher" | "shield" | "boss";
+export type EnemyClass = "drone" | "shooter" | "sniper" | "slasher" | "shield" | "boss" | "node";
 
 export type Enemy = {
   id: number;
@@ -51,6 +51,7 @@ export type Enemy = {
   abilityActiveBlind?: number;
   telegraph?: number;
   attackKind?: "sweep" | "rush" | "predict";
+  attackState?: "idle" | "windup" | "swinging" | "cooldown";
 };
 
 export type Bullet = {
@@ -101,6 +102,8 @@ export type Pickup = {
   rarity?: "common" | "rare" | "epic";
   opened?: boolean;
   openTime?: number;
+  lockedByNodes?: boolean;
+  lockedByTerminal?: boolean;
 };
 
 export type Grenade = {
@@ -135,10 +138,10 @@ export const DIFFICULTY_PRESETS: Record<Difficulty, {
 };
 
 export const LEVEL_TIME_LIMITS: Record<number, number> = {
-  1: 120,
-  2: 150,
-  3: 180,
-  4: 210,
+  1: 180,
+  2: 210,
+  3: 240,
+  4: 270,
 };
 
 export const SNIPER_MAX_ALIVE = 4;

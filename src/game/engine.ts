@@ -10,18 +10,19 @@ export const VIEW_W = 900;
 export const VIEW_H = 600;
 export const ARENA_W = VIEW_W;
 export const ARENA_H = VIEW_H;
+export const CAMERA_ZOOM = 0.75;
 
 const PLAYER_RADIUS = 22; // bigger sprite
 const PLAYER_MAX_SPEED = 195;
 const PLAYER_ACCEL = 13;
 const PLAYER_FRICTION = 10;
-const DASH_SPEED = 520;
-const DASH_DURATION = 0.18;
+const DASH_SPEED = 750;
+const DASH_DURATION = 0.22;
 const DASH_CD = 0.7;
-const DASH_IFRAMES = 0.22;
+const DASH_IFRAMES = 0.25;
 const SHOOT_CD = 0.22;
 const BULLET_SPEED = 620;
-const INPUT_BUFFER_TIME = 0.12;
+const INPUT_BUFFER_TIME = 0.25;
 
 type Action = "dash" | "shoot" | "freeze" | "grenade" | "reload";
 
@@ -44,22 +45,24 @@ const WORLD_SIZES: Record<number, { w: number; h: number }> = {
 
 // absolute base speed in px/s for each class (player baseline is 195)
 const CLASS_BASE_SPEED: Record<EnemyClass, number> = {
-  drone: 150,
-  shooter: 205,       // slightly faster than player
-  sniper: 110,        // slow
-  slasher: 220,       // faster than player
-  shield: 165,        // faster than before
-  boss: 130,
+  drone: 125,
+  shooter: 155,       // slower than player
+  sniper: 85,         // slow
+  slasher: 180,       // slightly slower than player (base speed is 195)
+  shield: 120,        // slower
+  boss: 105,
+  node: 0,
 };
 
-// base detection radius (px) — sniper highest, slasher lowest
+// base detection radius (px) — sniper highest, slasher lowest (scales inversely with speed)
 const CLASS_DETECT: Record<EnemyClass, number> = {
-  drone: 360,
-  shooter: 520,
+  drone: 500,
+  shooter: 350,
   sniper: 900,
-  slasher: 300,
-  shield: 380,
+  slasher: 280,
+  shield: 450,
   boss: 9999,
+  node: 0,
 };
 
 // per-class hp multiplier
@@ -70,6 +73,7 @@ const CLASS_HP_MUL: Record<EnemyClass, number> = {
   slasher: 1.8,
   shield: 4.5,
   boss: 1,
+  node: 0.3,
 };
 
 const CLASS_RADIUS: Record<EnemyClass, number> = {
@@ -79,6 +83,7 @@ const CLASS_RADIUS: Record<EnemyClass, number> = {
   slasher: 22,
   shield: 30,
   boss: 80,
+  node: 16,
 };
 
 // group composition weights (Slasher 30-45, Shooter 20-35, Shield 15-25, Sniper 10-20)
@@ -135,6 +140,14 @@ export class GameEngine {
   blindActive = 0;         // seconds remaining
   stunWarn = 0;            // seconds left on warning telegraph (before stun)
   bossKilled = false;
+
+  totalChests = 0;
+  openedChests = 0;
+  totalHostiles = 0;
+  killedHostiles = 0;
+  weaponMode: "sword" | "gun" = "sword";
+  decryptionProgress = 0;
+  decryptionComplete = false;
 
   // === Progression / abilities ===
   upgrades: UpgradeLevels = newUpgradeLevels();
@@ -219,14 +232,13 @@ export class GameEngine {
     this.blindActive = 0;
     this.stunWarn = 0;
     this.bossKilled = false;
+    this.decryptionProgress = 0;
+    this.decryptionComplete = false;
     this.m = { damageDealt: 0, damageTaken: 0, dashCount: 0, shotsFired: 0, shotsHit: 0, killsByDash: 0, killsByShot: 0 };
     this.resetPlayer(true);
     this.timeLimit = LEVEL_TIME_LIMITS[this.level] ?? 180;
     this.timeLeft = this.timeLimit;
-    const gateY =
-      this.level === 3 ? 1300 :
-      this.level === 1 ? this.worldH - 200 :
-      this.worldH / 2;
+    const gateY = this.worldH / 2;
     this.exitGate = { x: this.worldW - 140, y: gateY, r: 70, open: false };
     this.buildWalls();
     this.spawnEnemies(cfg);
@@ -251,6 +263,15 @@ export class GameEngine {
     this.walls.push({ x: 0, y: 0, w: t, h: this.worldH, kind: "wall" });
     this.walls.push({ x: this.worldW - t, y: 0, w: t, h: this.worldH, kind: "wall" });
 
+    // Corner block carvings for irregular shapes (non-boss levels 1-3)
+    if (this.level !== 4) {
+      const cSize = 350;
+      this.walls.push({ x: t, y: t, w: cSize, h: cSize, kind: "wall" });
+      this.walls.push({ x: this.worldW - t - cSize, y: t, w: cSize, h: cSize, kind: "wall" });
+      this.walls.push({ x: t, y: this.worldH - t - cSize, w: cSize, h: cSize, kind: "wall" });
+      this.walls.push({ x: this.worldW - t - cSize, y: this.worldH - t - cSize, w: cSize, h: cSize, kind: "wall" });
+    }
+
     const cy = this.worldH / 2;
     if (this.level === 1) {
       // rooms + hallways layout
@@ -264,6 +285,20 @@ export class GameEngine {
       this.walls.push({ x: 1050, y: this.worldH - 380 - t, w: 280, h: t, kind: "wall" });
       this.walls.push({ x: 1750, y: 500, w: 200, h: t, kind: "wall" });
       this.walls.push({ x: 1750, y: this.worldH - 500 - t, w: 200, h: t, kind: "wall" });
+
+      // Add lively props
+      this.walls.push({ x: 950, y: 350, w: 48, h: 80, kind: "server" });
+      this.walls.push({ x: 950, y: this.worldH - 430, w: 48, h: 80, kind: "server" });
+      this.walls.push({ x: 1850, y: 300, w: 60, h: 60, kind: "pillar" });
+      this.walls.push({ x: 1850, y: this.worldH - 360, w: 60, h: 60, kind: "pillar" });
+
+      // Puzzle Decryption terminal & barriers
+      this.walls.push({ x: 1500, y: 1050, w: 60, h: 60, kind: "puzzle_terminal" });
+      this.walls.push({ x: 1930, y: 980, w: 15, h: 140, kind: "locked_barrier", locked: true });
+      this.walls.push({ x: 2055, y: 980, w: 15, h: 140, kind: "locked_barrier", locked: true });
+      this.walls.push({ x: 1930, y: 980, w: 140, h: 15, kind: "locked_barrier", locked: true });
+      this.walls.push({ x: 1930, y: 1105, w: 140, h: 15, kind: "locked_barrier", locked: true });
+
     } else if (this.level === 2) {
       // grid of pillars + parkour corridors
       for (let i = 0; i < 6; i++) {
@@ -275,6 +310,21 @@ export class GameEngine {
       const cx2 = this.worldW / 2;
       this.walls.push({ x: cx2 - t / 2, y: 0, w: t, h: cy - 280, kind: "wall" });
       this.walls.push({ x: cx2 - t / 2, y: cy + 280, w: t, h: this.worldH - (cy + 280), kind: "wall" });
+
+      // Add lively props
+      this.walls.push({ x: 700, y: 600, w: 80, h: 48, kind: "server" });
+      this.walls.push({ x: 1600, y: 1200, w: 80, h: 48, kind: "server" });
+      this.walls.push({ x: 2500, y: 1800, w: 80, h: 48, kind: "server" });
+      this.walls.push({ x: 1000, y: 1000, w: 60, h: 60, kind: "pillar" });
+      this.walls.push({ x: 3000, y: 800, w: 60, h: 60, kind: "pillar" });
+
+      // Puzzle Decryption terminal & barriers
+      this.walls.push({ x: 2000, y: 500, w: 60, h: 60, kind: "puzzle_terminal" });
+      this.walls.push({ x: 1930, y: 1930, w: 15, h: 140, kind: "locked_barrier", locked: true });
+      this.walls.push({ x: 2055, y: 1930, w: 15, h: 140, kind: "locked_barrier", locked: true });
+      this.walls.push({ x: 1930, y: 1930, w: 140, h: 15, kind: "locked_barrier", locked: true });
+      this.walls.push({ x: 1930, y: 2055, w: 140, h: 15, kind: "locked_barrier", locked: true });
+
     } else if (this.level === 3) {
       // labyrinth: rooms connected by hallways
       const verticals = [600, 1100, 1700, 2300, 2900, 3500];
@@ -288,6 +338,22 @@ export class GameEngine {
       this.walls.push({ x: 1700, y: 700, w: 480, h: t, kind: "wall" });
       this.walls.push({ x: 2400, y: 1400, w: 480, h: t, kind: "wall" });
       this.walls.push({ x: 3000, y: 900, w: 380, h: t, kind: "wall" });
+
+      // Add lively props
+      this.walls.push({ x: 800, y: 500, w: 80, h: 48, kind: "server" });
+      this.walls.push({ x: 1800, y: 1500, w: 80, h: 48, kind: "server" });
+      this.walls.push({ x: 2800, y: 1000, w: 80, h: 48, kind: "server" });
+      this.walls.push({ x: 1200, y: 1200, w: 64, h: 64, kind: "pillar" });
+      this.walls.push({ x: 2200, y: 600, w: 64, h: 64, kind: "pillar" });
+      this.walls.push({ x: 3200, y: 1600, w: 64, h: 64, kind: "pillar" });
+
+      // Puzzle Decryption terminal & barriers
+      this.walls.push({ x: 2500, y: 2000, w: 60, h: 60, kind: "puzzle_terminal" });
+      this.walls.push({ x: 930, y: 1930, w: 15, h: 140, kind: "locked_barrier", locked: true });
+      this.walls.push({ x: 1055, y: 1930, w: 15, h: 140, kind: "locked_barrier", locked: true });
+      this.walls.push({ x: 930, y: 1930, w: 140, h: 15, kind: "locked_barrier", locked: true });
+      this.walls.push({ x: 930, y: 2055, w: 140, h: 15, kind: "locked_barrier", locked: true });
+
     } else if (this.level === 4) {
       // boss colosseum
       const cx = this.worldW / 2;
@@ -308,6 +374,8 @@ export class GameEngine {
   }
 
   private spawnEnemies(cfg: LevelConfig) {
+    this.totalHostiles = 0;
+    this.killedHostiles = 0;
     const cx = this.worldW / 2;
     const cy = this.worldH / 2;
     if (this.level === 4) {
@@ -351,17 +419,42 @@ export class GameEngine {
         };
         pos = this.nudgeOutOfWalls(pos, 28);
         this.enemies.push(this.makeEnemy(cls, pos, cfg));
+        this.totalHostiles++;
       }
     }
   }
 
   private spawnChests(cfg: LevelConfig) {
+    this.totalChests = 0;
+    this.openedChests = 0;
     if (this.level === 4) {
       // 1 guaranteed chest in boss arena far corner
       const pos = this.nudgeOutOfWalls({ x: 320, y: 320 }, 24);
       this.pickups.push(this.makeChest(pos));
+      this.totalChests++;
       return;
     }
+
+    // Spawn guaranteed Epic Chest inside the decryption laser cage!
+    let epicPos: Vec = { x: 0, y: 0 };
+    if (this.level === 1) epicPos = { x: 2000, y: 1050 };
+    else if (this.level === 2) epicPos = { x: 2000, y: 2000 };
+    else if (this.level === 3) epicPos = { x: 1000, y: 2000 };
+    
+    if (epicPos.x > 0) {
+      this.pickups.push({
+        kind: "chest",
+        pos: epicPos,
+        r: 20,
+        taken: false,
+        opened: false,
+        rarity: "epic",
+        openTime: 0,
+        lockedByTerminal: true,
+      });
+      this.totalChests++;
+    }
+
     const count = cfg.groupPlan?.chestCount ?? (3 + this.level);
     for (let i = 0; i < count; i++) {
       let pos: Vec = {
@@ -371,20 +464,25 @@ export class GameEngine {
       // Keep chests away from player spawn corridor and the gate.
       if (Math.hypot(pos.x - 220, pos.y - this.worldH / 2) < 220) pos.x += 280;
       if (Math.hypot(pos.x - this.exitGate.x, pos.y - this.exitGate.y) < 180) pos.x -= 320;
-      pos = this.nudgeOutOfWalls(pos, 24);
-      this.pickups.push(this.makeChest(pos));
+      const chest = this.makeChest(pos);
+      this.pickups.push(chest);
+      this.totalChests++;
+      for (let j = 0; j < 3; j++) {
+        const angle = (Math.PI * 2 / 3) * j + Math.random() * 0.5;
+        const nodePos = this.nudgeOutOfWalls({ x: pos.x + Math.cos(angle) * 70, y: pos.y + Math.sin(angle) * 70 }, 16);
+        this.enemies.push(this.makeEnemy("node", nodePos, cfg));
+      }
     }
   }
 
   private makeChest(pos: Vec): Pickup {
-    // rarity roll: 65% common, 25% rare, 10% epic
     const r = Math.random();
     const rarity: "common" | "rare" | "epic" = r < 0.65 ? "common" : r < 0.90 ? "rare" : "epic";
     const loot =
       rarity === "epic" ? 120 + Math.floor(Math.random() * 80) :
       rarity === "rare" ? 60  + Math.floor(Math.random() * 50) :
                           25  + Math.floor(Math.random() * 30);
-    return { kind: "chest", pos, r: 20, taken: false, opened: false, loot, rarity, openTime: 0 };
+    return { kind: "chest", pos, r: 20, taken: false, opened: false, loot, rarity, openTime: 0, lockedByNodes: true };
   }
 
   private makeEnemy(cls: EnemyClass, pos: Vec, cfg: LevelConfig): Enemy {
@@ -667,7 +765,7 @@ export class GameEngine {
       return;
     }
     // victory condition
-    const aliveEnemies = this.enemies.length;
+    const aliveEnemies = this.enemies.filter(e => e.cls !== "node").length;
     if (this.level === 4) {
       if (this.bossKilled) {
         this.state = "victory";
@@ -675,28 +773,32 @@ export class GameEngine {
         this.spawnExplosion(this.player.pos.x, this.player.pos.y, "#00f0ff", 30);
       }
     } else {
-      // gate opens when all enemies cleared; reach gate to clear level
+      // gate opens when all hostile enemies cleared
       this.exitGate.open = aliveEnemies === 0;
       if (this.exitGate.open) {
         const dx = this.player.pos.x - this.exitGate.x;
         const dy = this.player.pos.y - this.exitGate.y;
-        if (Math.hypot(dx, dy) < this.exitGate.r + PLAYER_RADIUS - 6) {
+        if (Math.hypot(dx, dy) < this.exitGate.r + PLAYER_RADIUS + 30) {
           this.state = "victory";
           this.victoryHold = 2.2;
           this.player.attackSwing = 0;
           this.spawnExplosion(this.player.pos.x, this.player.pos.y, "#00f0ff", 30);
+          const reward = 150 + (this.level - 1) * 100;
+          this.currency += reward;
+          this.onEvent({ type: "currency", amount: reward, total: this.currency });
         }
       }
     }
   }
 
   private updateCamera() {
-    const targetX = this.player.pos.x - VIEW_W / 2;
-    const targetY = this.player.pos.y - VIEW_H / 2;
+    const zoom = CAMERA_ZOOM;
+    const targetX = this.player.pos.x - (VIEW_W / zoom) / 2;
+    const targetY = this.player.pos.y - (VIEW_H / zoom) / 2;
     this.cam.x += (targetX - this.cam.x) * 0.15;
     this.cam.y += (targetY - this.cam.y) * 0.15;
-    this.cam.x = Math.max(0, Math.min(this.worldW - VIEW_W, this.cam.x));
-    this.cam.y = Math.max(0, Math.min(this.worldH - VIEW_H, this.cam.y));
+    this.cam.x = Math.max(0, Math.min(this.worldW - VIEW_W / zoom, this.cam.x));
+    this.cam.y = Math.max(0, Math.min(this.worldH - VIEW_H / zoom, this.cam.y));
   }
 
   snapshotMetrics(cleared: boolean): PlayerMetrics {
@@ -718,8 +820,88 @@ export class GameEngine {
 
   private updatePlayer(dt: number) {
     const p = this.player;
+
+    // Proximity Decryption terminal loop
+    if (!this.decryptionComplete && this.level !== 4) {
+      const term = this.walls.find(w => w.kind === "puzzle_terminal");
+      if (term) {
+        const termCX = term.x + term.w / 2;
+        const termCY = term.y + term.h / 2;
+        const dist = Math.hypot(p.pos.x - termCX, p.pos.y - termCY);
+        if (dist < 85) {
+          this.decryptionProgress = Math.min(1.0, this.decryptionProgress + dt * 0.4); // ~2.5s to decrypt
+          
+          if (Math.random() < 0.25) {
+            this.particles.push({
+              pos: { x: termCX + (Math.random() - 0.5) * 40, y: termCY + (Math.random() - 0.5) * 40 },
+              vel: { x: (Math.random() - 0.5) * 40, y: -Math.random() * 40 },
+              life: 0.5,
+              maxLife: 0.5,
+              color: "#00ffff",
+              size: 2
+            });
+          }
+
+          if (this.decryptionProgress >= 1.0) {
+            this.decryptionComplete = true;
+            try {
+              audio.play("upgradeBuy");
+            } catch (err) {
+              // fallback
+            }
+            
+            // Remove or unlock all locked barriers
+            this.walls = this.walls.filter(w => w.kind !== "locked_barrier");
+            
+            // Unlock terminal chests
+            for (const pk of this.pickups) {
+              if (pk.kind === "chest" && pk.lockedByTerminal) {
+                pk.lockedByTerminal = false;
+                this.spawnExplosion(pk.pos.x, pk.pos.y, "#00f0ff", 20);
+              }
+            }
+            
+            // Display floating success message
+            this.floats.push({
+              pos: { x: termCX, y: termCY - 40 },
+              vel: { x: 0, y: -45 },
+              life: 2.0,
+              maxLife: 2.0,
+              text: "SECURITY GRID BYPASSED",
+              color: "#00ffff",
+              size: 18
+            });
+
+            // Sparkling burst
+            for (let i = 0; i < 30; i++) {
+              const ang = Math.random() * Math.PI * 2;
+              const spd = 40 + Math.random() * 120;
+              this.particles.push({
+                pos: { x: termCX, y: termCY },
+                vel: { x: Math.cos(ang) * spd, y: Math.sin(ang) * spd },
+                life: 0.8,
+                maxLife: 0.8,
+                color: "#00ffcc",
+                size: 2.5 + Math.random() * 2.5
+              });
+            }
+          }
+        } else {
+          this.decryptionProgress = Math.max(0, this.decryptionProgress - dt * 0.15);
+        }
+      }
+    }
     p.dashCd = Math.max(0, p.dashCd - dt);
     p.dashTime = Math.max(0, p.dashTime - dt);
+    if (p.dashTime > 0) {
+      if (Math.random() < 0.6) {
+        this.particles.push({
+          pos: { x: p.pos.x + (Math.random() - 0.5) * 16, y: p.pos.y + (Math.random() - 0.5) * 16 },
+          vel: { x: -p.vel.x * 0.12, y: -p.vel.y * 0.12 },
+          life: 0.35, maxLife: 0.35, color: "#00f0ff", size: 2.5 + Math.random() * 2,
+        });
+      }
+    }
     p.iFrames = Math.max(0, p.iFrames - dt);
     p.shootCd = Math.max(0, p.shootCd - dt);
     p.stunned = Math.max(0, p.stunned - dt);
@@ -759,11 +941,12 @@ export class GameEngine {
     if (p.dashCd === 0 && p.stunned === 0 && this.consumeBuffer("dash")) {
       const d = dir.x === 0 && dir.y === 0 ? p.facing : dir;
       const dlen = Math.hypot(d.x, d.y) || 1;
-      p.vel.x = (d.x / dlen) * DASH_SPEED;
-      p.vel.y = (d.y / dlen) * DASH_SPEED;
-      p.dashTime = DASH_DURATION;
+      const der = derive(this.upgrades);
+      p.vel.x = (d.x / dlen) * DASH_SPEED * der.dashSpeedMult;
+      p.vel.y = (d.y / dlen) * DASH_SPEED * der.dashSpeedMult;
+      p.dashTime = DASH_DURATION * der.dashRangeMult;
       p.dashCd = DASH_CD;
-      p.iFrames = DASH_IFRAMES;
+      p.iFrames = DASH_IFRAMES * der.dashRangeMult;
       p.scaleX = 1.5; p.scaleY = 0.6;
       this.m.dashCount++;
       for (let i = 0; i < 12; i++) {
@@ -779,11 +962,12 @@ export class GameEngine {
     if (p.shootCd === 0 && p.stunned === 0 && this.consumeBuffer("shoot")) {
       const aim = this.aimDir();
       const tipDist = PLAYER_RADIUS + 30;
-      if (!der.bulletsEnabled) {
-        // bullets locked — play sword swing only (no projectile)
+      if (this.weaponMode === "sword" || !der.bulletsEnabled) {
+        // bullets locked or sword mode selected — play sword swing only
         p.attackSwing = 1; p.facing = aim;
         audio.play("sword");
-        p.shootCd = SHOOT_CD;
+        p.shootCd = 0.3; // 0.3s cooldown
+        this.performMeleeAttack(aim, der.swordBonus);
       } else if (this.reloading > 0 || this.ammo <= 0) {
         audio.play("noAmmo");
         if (this.ammo <= 0 && this.reloading === 0) {
@@ -814,6 +998,7 @@ export class GameEngine {
         p.attackSwing = 1;
         this.m.shotsFired++;
         p.scaleX = 1.25; p.scaleY = 0.88;
+        this.performMeleeAttack(aim, der.swordBonus);
       }
     }
 
@@ -960,23 +1145,44 @@ export class GameEngine {
           // faster, periodic dash
           let speed = e.speed;
           if (e.dashTime > 0) speed = e.speed * 3.6;
-          const tvx = dirToPlayer.x * speed;
-          const tvy = dirToPlayer.y * speed;
-          e.vel.x = lerp(e.vel.x, tvx, dt * 6);
-          e.vel.y = lerp(e.vel.y, tvy, dt * 6);
-          if (e.dashCd === 0 && d > 80 && d < 360) {
-            e.dashTime = 0.32;
-            const presets = DIFFICULTY_PRESETS[this.difficulty];
-            e.dashCd = 3.0 / presets.atkMul;
+          if (!e.attackState) e.attackState = "idle";
+          if (e.attackState === "idle" && d < 70 && e.attackTimer === 0) {
+            e.attackState = "windup";
+            e.attackTimer = 0.4;
+            e.vel.x = 0; e.vel.y = 0;
+            audio.play("enemySlash"); // windup queue
+          } else if (e.attackState === "windup" && e.attackTimer === 0) {
+            e.attackState = "swinging";
+            e.attackTimer = 0.2;
             audio.play("dash");
-            for (let i = 0; i < 8; i++) {
-              this.particles.push({
-                pos: { ...e.pos }, vel: { x: -dirToPlayer.x * 60 + (Math.random() - 0.5) * 30, y: -dirToPlayer.y * 60 + (Math.random() - 0.5) * 30 },
-                life: 0.3, maxLife: 0.3, color: "#ff66aa", size: 3,
-              });
+            if (d < 90 && this.player.dashTime <= 0 && this.player.iFrames === 0) {
+               this.damagePlayer(Math.round(20 * DIFFICULTY_PRESETS[this.difficulty].dmgMul));
+            }
+          } else if (e.attackState === "swinging" && e.attackTimer === 0) {
+            e.attackState = "cooldown";
+            e.attackTimer = 0.8 / DIFFICULTY_PRESETS[this.difficulty].atkMul;
+          } else if (e.attackState === "cooldown" && e.attackTimer === 0) {
+            e.attackState = "idle";
+          }
+
+          if (e.attackState === "idle" || e.attackState === "cooldown") {
+            const tvx = dirToPlayer.x * speed;
+            const tvy = dirToPlayer.y * speed;
+            e.vel.x = lerp(e.vel.x, tvx, dt * 6);
+            e.vel.y = lerp(e.vel.y, tvy, dt * 6);
+            if (e.dashCd === 0 && d > 80 && d < 360) {
+              e.dashTime = 0.32;
+              const presets = DIFFICULTY_PRESETS[this.difficulty];
+              e.dashCd = 3.0 / presets.atkMul;
+              audio.play("dash");
+              for (let i = 0; i < 8; i++) {
+                this.particles.push({
+                  pos: { ...e.pos }, vel: { x: -dirToPlayer.x * 60 + (Math.random() - 0.5) * 30, y: -dirToPlayer.y * 60 + (Math.random() - 0.5) * 30 },
+                  life: 0.3, maxLife: 0.3, color: "#ff66aa", size: 3,
+                });
+              }
             }
           }
-          if (d < 50) { if (e.attackTimer === 0) { e.attackTimer = 0.3; audio.play("enemySlash"); } }
           break;
         }
         case "shield": {
@@ -1108,6 +1314,7 @@ export class GameEngine {
           y: e.pos.y + Math.sin(a) * r,
         }, 24);
         this.enemies.push(this.makeEnemy(cls, pos, this.config!));
+        this.totalHostiles++;
       }
       e.spawnCd = e.bossPhase === 2 ? 18 : 28;
       this.onEvent({ type: "trace", msg: `Boss summons ${count} ${e.bossPhase === 2 ? "elite" : "drone"} reinforcements.` });
@@ -1185,13 +1392,30 @@ export class GameEngine {
 
   private updatePickups() {
     for (const pk of this.pickups) {
+      if (pk.kind === "chest" && pk.lockedByNodes) {
+        let nodesAlive = 0;
+        for (const e of this.enemies) {
+          if (e.cls === "node" && Math.hypot(e.pos.x - pk.pos.x, e.pos.y - pk.pos.y) < 300) {
+            nodesAlive++;
+          }
+        }
+        if (nodesAlive === 0) {
+          pk.lockedByNodes = false;
+          this.spawnExplosion(pk.pos.x, pk.pos.y, "#00ffff", 20);
+        }
+      }
+    }
+
+    for (const pk of this.pickups) {
       if (pk.taken) continue;
       const dx = this.player.pos.x - pk.pos.x;
       const dy = this.player.pos.y - pk.pos.y;
       if (Math.hypot(dx, dy) < pk.r + PLAYER_RADIUS - 4) {
         if (pk.kind === "chest") {
+          if (pk.lockedByNodes || pk.lockedByTerminal) continue;
           if (pk.opened) continue;
           pk.opened = true;
+          this.openedChests++;
           pk.openTime = 0.6;
           const reward = pk.loot ?? 30;
           this.currency += reward;
@@ -1366,7 +1590,7 @@ export class GameEngine {
       const dy = e.pos.y - p.pos.y;
       const dist = Math.hypot(dx, dy);
       if (dist < e.radius + PLAYER_RADIUS) {
-        if (p.dashTime > 0 && !(e.cls === "shield" && e.shieldActive) && !(e.isBoss && e.bossPhase === 2)) {
+        if (p.dashTime > 0 && !(e.isBoss && e.bossPhase === 2)) {
           const dmg = e.isBoss ? 4 : 3;
           e.hp -= dmg;
           e.hitFlash = 0.15;
@@ -1374,9 +1598,9 @@ export class GameEngine {
           this.spawnExplosion(e.pos.x, e.pos.y, "#00f0ff", 14);
           if (e.hp <= 0) { this.m.killsByDash++; this.killEnemy(e); }
         } else if (p.iFrames === 0) {
+          if (e.cls === "slasher" || e.cls === "node") continue; // Slasher uses swing attack, nodes don't damage
           const base = e.isBoss
             ? (e.bossPhase === 2 ? 26 : 18)
-            : e.cls === "slasher" ? 14
             : e.cls === "shooter" ? 10
             : e.cls === "shield" ? 16
             : 10;
@@ -1421,9 +1645,17 @@ export class GameEngine {
   }
 
   private killEnemy(e: Enemy) {
-    if (e.isBoss) this.bossKilled = true;
+    if (e.cls === "boss") {
+      this.bossKilled = true;
+      audio.play("bossDeath");
+      this.spawnExplosion(e.pos.x, e.pos.y, "#ff00cc", 100);
+    } else {
+      audio.play("enemyDeath");
+      this.spawnExplosion(e.pos.x, e.pos.y, e.cls === "node" ? "#00ffff" : "#ff3b6b", 25);
+    }
+    if (e.cls !== "node") this.killedHostiles++;
+    this.m.damageDealt += e.hp; 
     this.enemies = this.enemies.filter((x) => x.id !== e.id);
-    this.spawnExplosion(e.pos.x, e.pos.y, e.isBoss ? "#ff00cc" : "#00f0ff", e.isBoss ? 50 : 14);
     this.shake = Math.max(this.shake, e.isBoss ? 18 : 4);
   }
 
@@ -1437,6 +1669,34 @@ export class GameEngine {
         life: 0.4 + Math.random() * 0.3,
         maxLife: 0.7, color, size: 2 + Math.random() * 3,
       });
+    }
+  }
+
+  performMeleeAttack(aim: Vec, swordBonus: number) {
+    const range = 115; // increased sword swing range
+    const baseDmg = 3;
+    const dmg = baseDmg + swordBonus;
+    for (const e of this.enemies) {
+      const dx = e.pos.x - this.player.pos.x;
+      const dy = e.pos.y - this.player.pos.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist < range + e.radius) {
+        // Check if inside a 120-degree cone (dot product > 0.45)
+        const nx = dx / (dist || 1);
+        const ny = dy / (dist || 1);
+        const dot = nx * aim.x + ny * aim.y;
+        if (dot > 0.45) {
+          e.hp -= dmg;
+          e.hitFlash = 0.15;
+          this.m.damageDealt += dmg;
+          this.spawnExplosion(e.pos.x, e.pos.y, "#00f0ff", 8);
+          audio.play("hit");
+          if (e.hp <= 0) {
+            this.m.killsByShot++; // count melee kills in shot metrics
+            this.killEnemy(e);
+          }
+        }
+      }
     }
   }
 }
