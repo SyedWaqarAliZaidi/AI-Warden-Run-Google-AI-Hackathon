@@ -1,0 +1,11 @@
+{
+  "appId": "com.wardenslabyrinth.game",
+  "appName": "The Warden's Labyrinth",
+  "webDir": "dist",
+  "bundledWebRuntime": false,
+  "plugins": {
+    "ScreenOrientation": {
+      "orientation": "landscape"
+    }
+  }
+}

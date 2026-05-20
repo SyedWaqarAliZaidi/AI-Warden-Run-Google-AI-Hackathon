@@ -6,11 +6,23 @@ export type Hazard =
   | { kind: "phase"; x: number; y: number; w: number; h: number; phase: number; period: number }
   | { kind: "stun_pylon"; x: number; y: number; r: number; cooldown: number; charge: number }
   | { kind: "anti_dash"; x: number; y: number; r: number }
-  | { kind: "spike"; x: number; y: number; w: number; h: number; phase: number; period: number; armed: boolean }
+  | {
+      kind: "spike";
+      x: number;
+      y: number;
+      w: number;
+      h: number;
+      phase: number;
+      period: number;
+      armed: boolean;
+    }
   | { kind: "shock"; x: number; y: number; w: number; h: number; phase: number };
 
 export type Wall = {
-  x: number; y: number; w: number; h: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
   kind: "wall" | "gate" | "pillar" | "server" | "puzzle_terminal" | "locked_barrier";
   locked?: boolean;
 };
@@ -36,17 +48,17 @@ export type Enemy = {
   shootCd: number;
   dashCd: number;
   dashTime: number;
-  shieldActive: boolean;        // shield class: deployed
-  detectRange: number;          // base sight radius in world px
-  aggroTimer: number;           // seconds of memory after losing LOS
-  hasLOS: boolean;              // cached this frame
+  shieldActive: boolean; // shield class: deployed
+  detectRange: number; // base sight radius in world px
+  aggroTimer: number; // seconds of memory after losing LOS
+  hasLOS: boolean; // cached this frame
   isBoss?: boolean;
   // boss
   bossPhase?: 1 | 2;
   stunCd?: number;
   blindCd?: number;
   spawnCd?: number;
-  abilityWarn?: number;         // counts down 3->0 before stun
+  abilityWarn?: number; // counts down 3->0 before stun
   abilityActiveStun?: number;
   abilityActiveBlind?: number;
   telegraph?: number;
@@ -98,8 +110,8 @@ export type Pickup = {
   taken: boolean;
   /** chest loot in currency (rolled at spawn) */
   loot?: number;
-  /** chest rarity: common / rare / epic */
-  rarity?: "common" | "rare" | "epic";
+  /** chest rarity: normal / rare / epic / legendary */
+  rarity?: "normal" | "rare" | "epic" | "legendary";
   opened?: boolean;
   openTime?: number;
   lockedByNodes?: boolean;
@@ -109,9 +121,9 @@ export type Pickup = {
 export type Grenade = {
   pos: Vec;
   vel: Vec;
-  life: number;       // travel time remaining
-  fuse: number;       // seconds until detonation
-  radius: number;     // explosion radius
+  life: number; // travel time remaining
+  fuse: number; // seconds until detonation
+  radius: number; // explosion radius
   damage: number;
 };
 
@@ -127,14 +139,64 @@ export type FloatingText = {
 
 export type Difficulty = "easy" | "medium" | "hard" | "nightmare";
 
-export const DIFFICULTY_PRESETS: Record<Difficulty, {
-  countMul: number; dmgMul: number; hpMul: number; atkMul: number; moveMul: number; detectMul: number;
-  groupBase: number; label: string; color: string;
-}> = {
-  easy:      { countMul: 0.7, dmgMul: 0.55, hpMul: 0.7, atkMul: 0.8,  moveMul: 0.9,  detectMul: 0.85, groupBase: 6,  label: "EASY",      color: "#00ffaa" },
-  medium:    { countMul: 1.0, dmgMul: 1.0,  hpMul: 1.0, atkMul: 1.0,  moveMul: 1.0,  detectMul: 1.0,  groupBase: 8,  label: "MEDIUM",    color: "#00f0ff" },
-  hard:      { countMul: 1.4, dmgMul: 1.6,  hpMul: 1.6, atkMul: 1.25, moveMul: 1.1,  detectMul: 1.15, groupBase: 11, label: "HARD",      color: "#ffcc00" },
-  nightmare: { countMul: 1.9, dmgMul: 2.4,  hpMul: 2.4, atkMul: 1.55, moveMul: 1.25, detectMul: 1.35, groupBase: 14, label: "NIGHTMARE", color: "#ff3b64" },
+export const DIFFICULTY_PRESETS: Record<
+  Difficulty,
+  {
+    countMul: number;
+    dmgMul: number;
+    hpMul: number;
+    atkMul: number;
+    moveMul: number;
+    detectMul: number;
+    groupBase: number;
+    label: string;
+    color: string;
+  }
+> = {
+  easy: {
+    countMul: 0.7,
+    dmgMul: 0.55,
+    hpMul: 0.7,
+    atkMul: 0.8,
+    moveMul: 0.9,
+    detectMul: 0.85,
+    groupBase: 6,
+    label: "EASY",
+    color: "#00ffaa",
+  },
+  medium: {
+    countMul: 1.0,
+    dmgMul: 1.0,
+    hpMul: 1.0,
+    atkMul: 1.0,
+    moveMul: 1.0,
+    detectMul: 1.0,
+    groupBase: 8,
+    label: "MEDIUM",
+    color: "#00f0ff",
+  },
+  hard: {
+    countMul: 1.4,
+    dmgMul: 1.6,
+    hpMul: 1.6,
+    atkMul: 1.25,
+    moveMul: 1.1,
+    detectMul: 1.15,
+    groupBase: 11,
+    label: "HARD",
+    color: "#ffcc00",
+  },
+  nightmare: {
+    countMul: 1.9,
+    dmgMul: 2.4,
+    hpMul: 2.4,
+    atkMul: 1.55,
+    moveMul: 1.25,
+    detectMul: 1.35,
+    groupBase: 14,
+    label: "NIGHTMARE",
+    color: "#ff3b64",
+  },
 };
 
 export const LEVEL_TIME_LIMITS: Record<number, number> = {

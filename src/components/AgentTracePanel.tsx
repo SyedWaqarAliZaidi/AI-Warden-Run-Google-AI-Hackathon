@@ -1,5 +1,13 @@
 import React, { useState } from "react";
-import { Terminal, Shield, Activity, MessageSquare, ChevronDown, ChevronUp, Cpu } from "lucide-react";
+import {
+  Terminal,
+  Shield,
+  Activity,
+  MessageSquare,
+  ChevronDown,
+  ChevronUp,
+  Cpu,
+} from "lucide-react";
 
 export interface TraceEntry {
   id: string;
@@ -115,9 +123,7 @@ export function AgentTracePanel({ traces, onClear }: AgentTracePanelProps) {
             {traces.length === 0 ? (
               <div className="h-full flex flex-col items-center justify-center text-center text-cyan-500/40 p-4">
                 <Cpu className="w-8 h-8 mb-2 opacity-30 animate-pulse" />
-                <p className="text-[11px] uppercase tracking-widest">
-                  Warden Core Idle
-                </p>
+                <p className="text-[11px] uppercase tracking-widest">Warden Core Idle</p>
                 <p className="text-[9px] mt-1 text-cyan-600/50">
                   Begin run to initiate orchestration trace
                 </p>
@@ -136,10 +142,10 @@ export function AgentTracePanel({ traces, onClear }: AgentTracePanelProps) {
                         trace.agent === "strategy"
                           ? "bg-emerald-500"
                           : trace.agent === "narrative"
-                          ? "bg-fuchsia-500"
-                          : trace.agent === "referee"
-                          ? "bg-blue-500"
-                          : "bg-cyan-500"
+                            ? "bg-fuchsia-500"
+                            : trace.agent === "referee"
+                              ? "bg-blue-500"
+                              : "bg-cyan-500"
                       }`}
                     />
 
@@ -158,9 +164,7 @@ export function AgentTracePanel({ traces, onClear }: AgentTracePanelProps) {
                           </span>
                         )}
                       </div>
-                      <span className="text-[9px] text-cyan-500/40">
-                        {trace.timestamp}
-                      </span>
+                      <span className="text-[9px] text-cyan-500/40">{trace.timestamp}</span>
                     </div>
 
                     {/* Action & Decision */}

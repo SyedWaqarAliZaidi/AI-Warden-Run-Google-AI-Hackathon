@@ -1,5 +1,17 @@
 import type {
-  Bullet, Enemy, EnemyClass, Hazard, Particle, Pickup, Player, Vec, Wall, AnimState, Difficulty, Grenade, FloatingText,
+  Bullet,
+  Enemy,
+  EnemyClass,
+  Hazard,
+  Particle,
+  Pickup,
+  Player,
+  Vec,
+  Wall,
+  AnimState,
+  Difficulty,
+  Grenade,
+  FloatingText,
 } from "./types";
 import { DIFFICULTY_PRESETS, LEVEL_TIME_LIMITS, SNIPER_MAX_ALIVE } from "./types";
 import type { LevelConfig, PlayerMetrics } from "@/lib/warden.functions";
@@ -46,10 +58,10 @@ const WORLD_SIZES: Record<number, { w: number; h: number }> = {
 // absolute base speed in px/s for each class (player baseline is 195)
 const CLASS_BASE_SPEED: Record<EnemyClass, number> = {
   drone: 125,
-  shooter: 155,       // slower than player
-  sniper: 85,         // slow
-  slasher: 180,       // slightly slower than player (base speed is 195)
-  shield: 120,        // slower
+  shooter: 155, // slower than player
+  sniper: 85, // slow
+  slasher: 180, // slightly slower than player (base speed is 195)
+  shield: 120, // slower
   boss: 105,
   node: 0,
 };
@@ -90,12 +102,12 @@ const CLASS_RADIUS: Record<EnemyClass, number> = {
 function rollGroup(size: number, rng: () => number): EnemyClass[] {
   const out: EnemyClass[] = [];
   // pick a roll for this group within ranges
-  const slasherPct = 0.30 + rng() * 0.15;
-  const shooterPct = 0.20 + rng() * 0.15;
-  const shieldPct  = 0.15 + rng() * 0.10;
+  const slasherPct = 0.3 + rng() * 0.15;
+  const shooterPct = 0.2 + rng() * 0.15;
+  const shieldPct = 0.15 + rng() * 0.1;
   // sniper takes the rest, clamp to [0.10, 0.20]
   let sniperPct = 1 - slasherPct - shooterPct - shieldPct;
-  sniperPct = Math.max(0.10, Math.min(0.20, sniperPct));
+  sniperPct = Math.max(0.1, Math.min(0.2, sniperPct));
   const total = slasherPct + shooterPct + shieldPct + sniperPct;
   const ns = Math.round((slasherPct / total) * size);
   const nS = Math.round((shooterPct / total) * size);
@@ -126,6 +138,7 @@ export class GameEngine {
   level = 1;
   worldW = 1600;
   worldH = 1100;
+  autoAim = true;
   cam: Vec = { x: 0, y: 0 };
   state: EngineState = "countdown";
   countdown = 3;
@@ -137,9 +150,10 @@ export class GameEngine {
   timeLimit = 180;
   timeLeft = 180;
   exitGate: { x: number; y: number; r: number; open: boolean } = { x: 0, y: 0, r: 60, open: false };
-  blindActive = 0;         // seconds remaining
-  stunWarn = 0;            // seconds left on warning telegraph (before stun)
+  blindActive = 0; // seconds remaining
+  stunWarn = 0; // seconds left on warning telegraph (before stun)
   bossKilled = false;
+  legendaryChestSpawned = false;
 
   totalChests = 0;
   openedChests = 0;
@@ -153,11 +167,11 @@ export class GameEngine {
   upgrades: UpgradeLevels = newUpgradeLevels();
   currency = 0;
   ammo = 10;
-  reloading = 0;            // seconds remaining
+  reloading = 0; // seconds remaining
   freezeCharges = 0;
   grenadeCharges = 0;
-  freezeActive = 0;         // seconds remaining of time-freeze
-  freezeCd = 0;             // small input cd between throws
+  freezeActive = 0; // seconds remaining of time-freeze
+  freezeCd = 0; // small input cd between throws
   grenadeCd = 0;
 
   m = {
@@ -184,7 +198,7 @@ export class GameEngine {
   }
 
   resetPlayer(fullReset: boolean) {
-    const healUsed = fullReset ? false : this.player?.healUsed ?? false;
+    const healUsed = fullReset ? false : (this.player?.healUsed ?? false);
     const d = derive(this.upgrades);
     this.player = {
       pos: { x: 220, y: this.worldH / 2 },
@@ -192,9 +206,12 @@ export class GameEngine {
       hp: d.maxHp,
       maxHp: d.maxHp,
       facing: { x: 1, y: 0 },
-      dashCd: 0, dashTime: 0, iFrames: 0,
+      dashCd: 0,
+      dashTime: 0,
+      iFrames: 0,
       shootCd: 0,
-      scaleX: 1, scaleY: 1,
+      scaleX: 1,
+      scaleY: 1,
       stunned: 0,
       animTime: 0,
       anim: "idle",
@@ -221,6 +238,9 @@ export class GameEngine {
     this.worldW = ws.w;
     this.worldH = ws.h;
     this.elapsed = 0;
+    this.shake = 0;
+    this.keys.clear();
+    this.virtualMove = { x: 0, y: 0 };
     this.enemies = [];
     this.bullets = [];
     this.hazards = [];
@@ -232,9 +252,18 @@ export class GameEngine {
     this.blindActive = 0;
     this.stunWarn = 0;
     this.bossKilled = false;
+    this.legendaryChestSpawned = false;
     this.decryptionProgress = 0;
     this.decryptionComplete = false;
-    this.m = { damageDealt: 0, damageTaken: 0, dashCount: 0, shotsFired: 0, shotsHit: 0, killsByDash: 0, killsByShot: 0 };
+    this.m = {
+      damageDealt: 0,
+      damageTaken: 0,
+      dashCount: 0,
+      shotsFired: 0,
+      shotsHit: 0,
+      killsByDash: 0,
+      killsByShot: 0,
+    };
     this.resetPlayer(true);
     this.timeLimit = LEVEL_TIME_LIMITS[this.level] ?? 180;
     this.timeLeft = this.timeLimit;
@@ -246,7 +275,12 @@ export class GameEngine {
     this.spawnChests(cfg);
     if (this.level === 4) {
       // healing item: far corner from boss
-      this.pickups.push({ kind: "heal", pos: { x: 200, y: this.worldH - 200 }, r: 22, taken: false });
+      this.pickups.push({
+        kind: "heal",
+        pos: { x: 200, y: this.worldH - 200 },
+        r: 22,
+        taken: false,
+      });
     }
     this.state = "countdown";
     this.countdown = 3;
@@ -269,7 +303,13 @@ export class GameEngine {
       this.walls.push({ x: t, y: t, w: cSize, h: cSize, kind: "wall" });
       this.walls.push({ x: this.worldW - t - cSize, y: t, w: cSize, h: cSize, kind: "wall" });
       this.walls.push({ x: t, y: this.worldH - t - cSize, w: cSize, h: cSize, kind: "wall" });
-      this.walls.push({ x: this.worldW - t - cSize, y: this.worldH - t - cSize, w: cSize, h: cSize, kind: "wall" });
+      this.walls.push({
+        x: this.worldW - t - cSize,
+        y: this.worldH - t - cSize,
+        w: cSize,
+        h: cSize,
+        kind: "wall",
+      });
     }
 
     const cy = this.worldH / 2;
@@ -298,7 +338,6 @@ export class GameEngine {
       this.walls.push({ x: 2055, y: 980, w: 15, h: 140, kind: "locked_barrier", locked: true });
       this.walls.push({ x: 1930, y: 980, w: 140, h: 15, kind: "locked_barrier", locked: true });
       this.walls.push({ x: 1930, y: 1105, w: 140, h: 15, kind: "locked_barrier", locked: true });
-
     } else if (this.level === 2) {
       // grid of pillars + parkour corridors
       for (let i = 0; i < 6; i++) {
@@ -309,7 +348,13 @@ export class GameEngine {
       // long divider with parkour gap
       const cx2 = this.worldW / 2;
       this.walls.push({ x: cx2 - t / 2, y: 0, w: t, h: cy - 280, kind: "wall" });
-      this.walls.push({ x: cx2 - t / 2, y: cy + 280, w: t, h: this.worldH - (cy + 280), kind: "wall" });
+      this.walls.push({
+        x: cx2 - t / 2,
+        y: cy + 280,
+        w: t,
+        h: this.worldH - (cy + 280),
+        kind: "wall",
+      });
 
       // Add lively props
       this.walls.push({ x: 700, y: 600, w: 80, h: 48, kind: "server" });
@@ -324,14 +369,19 @@ export class GameEngine {
       this.walls.push({ x: 2055, y: 1930, w: 15, h: 140, kind: "locked_barrier", locked: true });
       this.walls.push({ x: 1930, y: 1930, w: 140, h: 15, kind: "locked_barrier", locked: true });
       this.walls.push({ x: 1930, y: 2055, w: 140, h: 15, kind: "locked_barrier", locked: true });
-
     } else if (this.level === 3) {
       // labyrinth: rooms connected by hallways
       const verticals = [600, 1100, 1700, 2300, 2900, 3500];
       for (const vx of verticals) {
         const gapY = 400 + Math.random() * 1400;
         this.walls.push({ x: vx, y: 200, w: t, h: gapY - 200, kind: "wall" });
-        this.walls.push({ x: vx, y: gapY + 280, w: t, h: this.worldH - (gapY + 280) - 200, kind: "wall" });
+        this.walls.push({
+          x: vx,
+          y: gapY + 280,
+          w: t,
+          h: this.worldH - (gapY + 280) - 200,
+          kind: "wall",
+        });
       }
       // horizontal cross-walls
       this.walls.push({ x: 700, y: 1100, w: 380, h: t, kind: "wall" });
@@ -353,7 +403,6 @@ export class GameEngine {
       this.walls.push({ x: 1055, y: 1930, w: 15, h: 140, kind: "locked_barrier", locked: true });
       this.walls.push({ x: 930, y: 1930, w: 140, h: 15, kind: "locked_barrier", locked: true });
       this.walls.push({ x: 930, y: 2055, w: 140, h: 15, kind: "locked_barrier", locked: true });
-
     } else if (this.level === 4) {
       // boss colosseum
       const cx = this.worldW / 2;
@@ -364,7 +413,9 @@ export class GameEngine {
         this.walls.push({
           x: cx + Math.cos(a) * ringR - 40,
           y: cy2 + Math.sin(a) * ringR - 40,
-          w: 100, h: 100, kind: "wall",
+          w: 100,
+          h: 100,
+          kind: "wall",
         });
       }
       // partition guarding the heal pickup corridor
@@ -387,17 +438,20 @@ export class GameEngine {
     const aiPlan = cfg.groupPlan;
     const baseSize = presets.groupBase + (this.level - 1);
     const groupCount = aiPlan?.groupCount ?? (this.level === 1 ? 2 : this.level === 2 ? 3 : 4);
-    const groupSizes: number[] = Array.from({ length: groupCount }, (_, i) =>
-      aiPlan?.groupSizes?.[i] ?? baseSize,
+    const groupSizes: number[] = Array.from(
+      { length: groupCount },
+      (_, i) => aiPlan?.groupSizes?.[i] ?? baseSize,
     );
     // Build a normalized weight pool from AI (clamped to allowed ranges).
     const w = aiPlan?.weights ?? null;
-    const clampedW = w ? {
-      slasher: clamp(w.slasher, 0.30, 0.45),
-      shooter: clamp(w.shooter, 0.20, 0.35),
-      shield:  clamp(w.shield,  0.15, 0.25),
-      sniper:  clamp(w.sniper,  0.10, 0.20),
-    } : null;
+    const clampedW = w
+      ? {
+          slasher: clamp(w.slasher, 0.3, 0.45),
+          shooter: clamp(w.shooter, 0.2, 0.35),
+          shield: clamp(w.shield, 0.15, 0.25),
+          sniper: clamp(w.sniper, 0.1, 0.2),
+        }
+      : null;
     let sniperAlive = 0;
     for (let gi = 0; gi < groupCount; gi++) {
       const size = Math.max(2, Math.min(20, groupSizes[gi]));
@@ -440,7 +494,7 @@ export class GameEngine {
     if (this.level === 1) epicPos = { x: 2000, y: 1050 };
     else if (this.level === 2) epicPos = { x: 2000, y: 2000 };
     else if (this.level === 3) epicPos = { x: 1000, y: 2000 };
-    
+
     if (epicPos.x > 0) {
       this.pickups.push({
         kind: "chest",
@@ -449,15 +503,16 @@ export class GameEngine {
         taken: false,
         opened: false,
         rarity: "epic",
+        loot: 150 + Math.floor(Math.random() * 151),
         openTime: 0,
         lockedByTerminal: true,
       });
       this.totalChests++;
     }
 
-    const count = cfg.groupPlan?.chestCount ?? (3 + this.level);
+    const count = cfg.groupPlan?.chestCount ?? 3 + this.level;
     for (let i = 0; i < count; i++) {
-      let pos: Vec = {
+      const pos: Vec = {
         x: 220 + Math.random() * (this.worldW - 440),
         y: 220 + Math.random() * (this.worldH - 440),
       };
@@ -468,8 +523,11 @@ export class GameEngine {
       this.pickups.push(chest);
       this.totalChests++;
       for (let j = 0; j < 3; j++) {
-        const angle = (Math.PI * 2 / 3) * j + Math.random() * 0.5;
-        const nodePos = this.nudgeOutOfWalls({ x: pos.x + Math.cos(angle) * 70, y: pos.y + Math.sin(angle) * 70 }, 16);
+        const angle = ((Math.PI * 2) / 3) * j + Math.random() * 0.5;
+        const nodePos = this.nudgeOutOfWalls(
+          { x: pos.x + Math.cos(angle) * 70, y: pos.y + Math.sin(angle) * 70 },
+          16,
+        );
         this.enemies.push(this.makeEnemy("node", nodePos, cfg));
       }
     }
@@ -477,17 +535,38 @@ export class GameEngine {
 
   private makeChest(pos: Vec): Pickup {
     const r = Math.random();
-    const rarity: "common" | "rare" | "epic" = r < 0.65 ? "common" : r < 0.90 ? "rare" : "epic";
+    const rarity: "normal" | "rare" | "epic" | "legendary" =
+      r < 0.60
+        ? "normal"
+        : r < 0.85
+          ? "rare"
+          : r < 0.96
+            ? "epic"
+            : "legendary";
     const loot =
-      rarity === "epic" ? 120 + Math.floor(Math.random() * 80) :
-      rarity === "rare" ? 60  + Math.floor(Math.random() * 50) :
-                          25  + Math.floor(Math.random() * 30);
-    return { kind: "chest", pos, r: 20, taken: false, opened: false, loot, rarity, openTime: 0, lockedByNodes: true };
+      rarity === "legendary"
+        ? 200 + Math.floor(Math.random() * 201)
+        : rarity === "epic"
+          ? 150 + Math.floor(Math.random() * 151)
+          : rarity === "rare"
+            ? 50 + Math.floor(Math.random() * 101)
+            : 10 + Math.floor(Math.random() * 41);
+    return {
+      kind: "chest",
+      pos,
+      r: 20,
+      taken: false,
+      opened: false,
+      loot,
+      rarity,
+      openTime: 0,
+      lockedByNodes: true,
+    };
   }
 
   private makeEnemy(cls: EnemyClass, pos: Vec, cfg: LevelConfig): Enemy {
     const presets = DIFFICULTY_PRESETS[this.difficulty];
-    const baseHp = cls === "boss" ? 260 : (cfg.enemyHp * 2 + 2);
+    const baseHp = cls === "boss" ? 260 : cfg.enemyHp * 2 + 2;
     const hp = Math.max(1, Math.round(baseHp * CLASS_HP_MUL[cls] * presets.hpMul));
     const speed = CLASS_BASE_SPEED[cls] * presets.moveMul;
     const detectRange = CLASS_DETECT[cls] * presets.detectMul;
@@ -496,7 +575,8 @@ export class GameEngine {
       cls,
       pos,
       vel: { x: 0, y: 0 },
-      hp, maxHp: hp,
+      hp,
+      maxHp: hp,
       speed,
       radius: CLASS_RADIUS[cls],
       hitFlash: 0,
@@ -522,17 +602,17 @@ export class GameEngine {
   }
 
   private nudgeOutOfWalls(p: Vec, r: number): Vec {
-    let out = { ...p };
+    const out = { ...p };
     for (let i = 0; i < 6; i++) {
       let hit = false;
       for (const w of this.walls) {
-        if (
-          out.x + r > w.x && out.x - r < w.x + w.w &&
-          out.y + r > w.y && out.y - r < w.y + w.h
-        ) {
+        if (out.x + r > w.x && out.x - r < w.x + w.w && out.y + r > w.y && out.y - r < w.y + w.h) {
           hit = true;
           out.x += 80;
-          if (out.x > this.worldW - 80) { out.x = 200; out.y += 80; }
+          if (out.x > this.worldW - 80) {
+            out.x = 200;
+            out.y += 80;
+          }
           break;
         }
       }
@@ -551,8 +631,14 @@ export class GameEngine {
         const x = 400 + Math.random() * (this.worldW - 800);
         const y = 250 + Math.random() * (this.worldH - 500);
         this.hazards.push({
-          kind: "spike", x, y, w: 80, h: 80,
-          phase: Math.random() * 2, period: 2.2 + Math.random() * 0.8, armed: false,
+          kind: "spike",
+          x,
+          y,
+          w: 80,
+          h: 80,
+          phase: Math.random() * 2,
+          period: 2.2 + Math.random() * 0.8,
+          armed: false,
         });
       }
       // electrified floor tiles
@@ -570,8 +656,10 @@ export class GameEngine {
             kind: "phase",
             x: 600 + i * 460,
             y: 360 + (i % 2) * 460,
-            w: 120, h: 120,
-            phase: i * 0.5, period: 2.4,
+            w: 120,
+            h: 120,
+            phase: i * 0.5,
+            period: 2.4,
           });
         }
       }
@@ -590,7 +678,15 @@ export class GameEngine {
           });
         }
       } else if (h === "conveyor") {
-        this.hazards.push({ kind: "conveyor", x: 400, y: cy - 60, w: this.worldW - 800, h: 120, vx: 100, vy: 0 });
+        this.hazards.push({
+          kind: "conveyor",
+          x: 400,
+          y: cy - 60,
+          w: this.worldW - 800,
+          h: 120,
+          vx: 100,
+          vy: 0,
+        });
       } else if (h === "phase") {
         for (let i = 0; i < 4; i++) {
           this.hazards.push({
@@ -609,7 +705,9 @@ export class GameEngine {
             kind: "stun_pylon",
             x: 520 + i * 480,
             y: 280 + (i % 2) * (this.worldH - 560),
-            r: 90, cooldown: 0, charge: 1 + i * 0.5,
+            r: 90,
+            cooldown: 0,
+            charge: 1 + i * 0.5,
           });
         }
       } else if (h === "anti_dash") {
@@ -628,7 +726,8 @@ export class GameEngine {
   // Raycast: returns number of wall AABBs the segment from a→b passes through.
   private wallsHitOnSegment(a: Vec, b: Vec): number {
     let count = 0;
-    const dx = b.x - a.x, dy = b.y - a.y;
+    const dx = b.x - a.x,
+      dy = b.y - a.y;
     for (const w of this.walls) {
       if (segmentIntersectsRect(a.x, a.y, dx, dy, w.x, w.y, w.w, w.h)) count++;
     }
@@ -640,7 +739,10 @@ export class GameEngine {
     const dy = this.player.pos.y - e.pos.y;
     const d = Math.hypot(dx, dy);
     e.aggroTimer = Math.max(0, e.aggroTimer - dt);
-    if (d > e.detectRange) { e.hasLOS = false; return; }
+    if (d > e.detectRange) {
+      e.hasLOS = false;
+      return;
+    }
     const walls = this.wallsHitOnSegment(e.pos, this.player.pos);
     const allowed = e.cls === "sniper" ? 2 : 0;
     if (walls <= allowed) {
@@ -655,13 +757,19 @@ export class GameEngine {
     this.buffer.push({ action: a, t: this.elapsed });
   }
   private consumeBuffer(a: Action): boolean {
-    const idx = this.buffer.findIndex((b) => b.action === a && this.elapsed - b.t < INPUT_BUFFER_TIME);
-    if (idx >= 0) { this.buffer.splice(idx, 1); return true; }
+    const idx = this.buffer.findIndex(
+      (b) => b.action === a && this.elapsed - b.t < INPUT_BUFFER_TIME,
+    );
+    if (idx >= 0) {
+      this.buffer.splice(idx, 1);
+      return true;
+    }
     return false;
   }
 
   private input(): Vec {
-    let x = 0, y = 0;
+    let x = 0,
+      y = 0;
     if (this.keys.has("w") || this.keys.has("arrowup")) y -= 1;
     if (this.keys.has("s") || this.keys.has("arrowdown")) y += 1;
     if (this.keys.has("a") || this.keys.has("arrowleft")) x -= 1;
@@ -765,7 +873,7 @@ export class GameEngine {
       return;
     }
     // victory condition
-    const aliveEnemies = this.enemies.filter(e => e.cls !== "node").length;
+    const aliveEnemies = this.enemies.filter((e) => e.cls !== "node").length;
     if (this.level === 4) {
       if (this.bossKilled) {
         this.state = "victory";
@@ -773,9 +881,28 @@ export class GameEngine {
         this.spawnExplosion(this.player.pos.x, this.player.pos.y, "#00f0ff", 30);
       }
     } else {
-      // gate opens when all hostile enemies cleared
-      this.exitGate.open = aliveEnemies === 0;
+      // gate opens when all hostile enemies cleared AND decryption is complete
+      this.exitGate.open = aliveEnemies === 0 && this.decryptionComplete;
       if (this.exitGate.open) {
+        if (!this.legendaryChestSpawned) {
+          const chestPos = this.nudgeOutOfWalls({ x: this.exitGate.x, y: this.exitGate.y + 70 }, 20);
+          this.pickups.push({
+            kind: "chest",
+            pos: chestPos,
+            r: 20,
+            taken: false,
+            opened: false,
+            rarity: "legendary",
+            loot: 200 + Math.floor(Math.random() * 201),
+            openTime: 0,
+            lockedByNodes: false,
+            lockedByTerminal: false,
+          });
+          this.totalChests++;
+          this.legendaryChestSpawned = true;
+          this.spawnExplosion(chestPos.x, chestPos.y, "#ff00cc", 25);
+          this.spawnFloat(chestPos.x, chestPos.y - 30, "LEGENDARY CHEST SPAWNED!", "#ff00cc");
+        }
         const dx = this.player.pos.x - this.exitGate.x;
         const dy = this.player.pos.y - this.exitGate.y;
         if (Math.hypot(dx, dy) < this.exitGate.r + PLAYER_RADIUS + 30) {
@@ -793,8 +920,8 @@ export class GameEngine {
 
   private updateCamera() {
     const zoom = CAMERA_ZOOM;
-    const targetX = this.player.pos.x - (VIEW_W / zoom) / 2;
-    const targetY = this.player.pos.y - (VIEW_H / zoom) / 2;
+    const targetX = this.player.pos.x - VIEW_W / zoom / 2;
+    const targetY = this.player.pos.y - VIEW_H / zoom / 2;
     this.cam.x += (targetX - this.cam.x) * 0.15;
     this.cam.y += (targetY - this.cam.y) * 0.15;
     this.cam.x = Math.max(0, Math.min(this.worldW - VIEW_W / zoom, this.cam.x));
@@ -823,22 +950,25 @@ export class GameEngine {
 
     // Proximity Decryption terminal loop
     if (!this.decryptionComplete && this.level !== 4) {
-      const term = this.walls.find(w => w.kind === "puzzle_terminal");
+      const term = this.walls.find((w) => w.kind === "puzzle_terminal");
       if (term) {
         const termCX = term.x + term.w / 2;
         const termCY = term.y + term.h / 2;
         const dist = Math.hypot(p.pos.x - termCX, p.pos.y - termCY);
         if (dist < 85) {
           this.decryptionProgress = Math.min(1.0, this.decryptionProgress + dt * 0.4); // ~2.5s to decrypt
-          
+
           if (Math.random() < 0.25) {
             this.particles.push({
-              pos: { x: termCX + (Math.random() - 0.5) * 40, y: termCY + (Math.random() - 0.5) * 40 },
+              pos: {
+                x: termCX + (Math.random() - 0.5) * 40,
+                y: termCY + (Math.random() - 0.5) * 40,
+              },
               vel: { x: (Math.random() - 0.5) * 40, y: -Math.random() * 40 },
               life: 0.5,
               maxLife: 0.5,
               color: "#00ffff",
-              size: 2
+              size: 2,
             });
           }
 
@@ -849,10 +979,10 @@ export class GameEngine {
             } catch (err) {
               // fallback
             }
-            
+
             // Remove or unlock all locked barriers
-            this.walls = this.walls.filter(w => w.kind !== "locked_barrier");
-            
+            this.walls = this.walls.filter((w) => w.kind !== "locked_barrier");
+
             // Unlock terminal chests
             for (const pk of this.pickups) {
               if (pk.kind === "chest" && pk.lockedByTerminal) {
@@ -860,7 +990,7 @@ export class GameEngine {
                 this.spawnExplosion(pk.pos.x, pk.pos.y, "#00f0ff", 20);
               }
             }
-            
+
             // Display floating success message
             this.floats.push({
               pos: { x: termCX, y: termCY - 40 },
@@ -869,7 +999,7 @@ export class GameEngine {
               maxLife: 2.0,
               text: "SECURITY GRID BYPASSED",
               color: "#00ffff",
-              size: 18
+              size: 18,
             });
 
             // Sparkling burst
@@ -882,7 +1012,7 @@ export class GameEngine {
                 life: 0.8,
                 maxLife: 0.8,
                 color: "#00ffcc",
-                size: 2.5 + Math.random() * 2.5
+                size: 2.5 + Math.random() * 2.5,
               });
             }
           }
@@ -898,7 +1028,10 @@ export class GameEngine {
         this.particles.push({
           pos: { x: p.pos.x + (Math.random() - 0.5) * 16, y: p.pos.y + (Math.random() - 0.5) * 16 },
           vel: { x: -p.vel.x * 0.12, y: -p.vel.y * 0.12 },
-          life: 0.35, maxLife: 0.35, color: "#00f0ff", size: 2.5 + Math.random() * 2,
+          life: 0.35,
+          maxLife: 0.35,
+          color: "#00f0ff",
+          size: 2.5 + Math.random() * 2,
         });
       }
     }
@@ -947,13 +1080,20 @@ export class GameEngine {
       p.dashTime = DASH_DURATION * der.dashRangeMult;
       p.dashCd = DASH_CD;
       p.iFrames = DASH_IFRAMES * der.dashRangeMult;
-      p.scaleX = 1.5; p.scaleY = 0.6;
+      p.scaleX = 1.5;
+      p.scaleY = 0.6;
       this.m.dashCount++;
       for (let i = 0; i < 12; i++) {
         this.particles.push({
           pos: { x: p.pos.x, y: p.pos.y },
-          vel: { x: -p.vel.x * 0.2 + (Math.random() - 0.5) * 40, y: -p.vel.y * 0.2 + (Math.random() - 0.5) * 40 },
-          life: 0.4, maxLife: 0.4, color: "#9d4dff", size: 4 + Math.random() * 3,
+          vel: {
+            x: -p.vel.x * 0.2 + (Math.random() - 0.5) * 40,
+            y: -p.vel.y * 0.2 + (Math.random() - 0.5) * 40,
+          },
+          life: 0.4,
+          maxLife: 0.4,
+          color: "#9d4dff",
+          size: 4 + Math.random() * 3,
         });
       }
     }
@@ -964,46 +1104,62 @@ export class GameEngine {
       const tipDist = PLAYER_RADIUS + 30;
       if (this.weaponMode === "sword" || !der.bulletsEnabled) {
         // bullets locked or sword mode selected — play sword swing only
-        p.attackSwing = 1; p.facing = aim;
+        p.attackSwing = 1;
+        p.facing = aim;
         audio.play("sword");
         p.shootCd = 0.3; // 0.3s cooldown
         this.performMeleeAttack(aim, der.swordBonus);
       } else if (this.reloading > 0 || this.ammo <= 0) {
         audio.play("noAmmo");
         if (this.ammo <= 0 && this.reloading === 0) {
-          this.reloading = 1.2; audio.play("reload");
+          this.reloading = 1.2;
+          audio.play("reload");
         }
         p.shootCd = SHOOT_CD;
       } else {
         this.bullets.push({
           pos: { x: p.pos.x + aim.x * tipDist, y: p.pos.y + aim.y * tipDist },
           vel: { x: aim.x * BULLET_SPEED, y: aim.y * BULLET_SPEED },
-          life: 3.5, fromPlayer: true, damage: der.bulletDamage,
+          life: 3.5,
+          fromPlayer: true,
+          damage: der.bulletDamage,
         });
         this.ammo -= 1;
         audio.play("shoot");
-        if (this.ammo <= 0) { this.reloading = 1.2; audio.play("reload"); }
-      // muzzle flash particles at sword tip
-      for (let i = 0; i < 8; i++) {
-        const a = Math.atan2(aim.y, aim.x) + (Math.random() - 0.5) * 0.7;
-        const s = 80 + Math.random() * 180;
-        this.particles.push({
-          pos: { x: p.pos.x + aim.x * tipDist, y: p.pos.y + aim.y * tipDist },
-          vel: { x: Math.cos(a) * s, y: Math.sin(a) * s },
-          life: 0.25, maxLife: 0.25, color: "#00ffaa", size: 2 + Math.random() * 2,
-        });
-      }
+        if (this.ammo <= 0) {
+          this.reloading = 1.2;
+          audio.play("reload");
+        }
+        // muzzle flash particles at sword tip
+        for (let i = 0; i < 8; i++) {
+          const a = Math.atan2(aim.y, aim.x) + (Math.random() - 0.5) * 0.7;
+          const s = 80 + Math.random() * 180;
+          this.particles.push({
+            pos: { x: p.pos.x + aim.x * tipDist, y: p.pos.y + aim.y * tipDist },
+            vel: { x: Math.cos(a) * s, y: Math.sin(a) * s },
+            life: 0.25,
+            maxLife: 0.25,
+            color: "#00ffaa",
+            size: 2 + Math.random() * 2,
+          });
+        }
         p.shootCd = SHOOT_CD;
         p.facing = aim;
         p.attackSwing = 1;
         this.m.shotsFired++;
-        p.scaleX = 1.25; p.scaleY = 0.88;
+        p.scaleX = 1.25;
+        p.scaleY = 0.88;
         this.performMeleeAttack(aim, der.swordBonus);
       }
     }
 
     // Ability: time freeze
-    if (this.consumeBuffer("freeze") && this.freezeCharges > 0 && this.freezeActive === 0 && this.freezeCd === 0) {
+    if (
+      this.consumeBuffer("freeze") &&
+      this.freezeCharges > 0 &&
+      this.freezeActive === 0 &&
+      this.freezeCd === 0
+    ) {
       this.freezeCharges--;
       this.freezeActive = 5;
       this.freezeCd = 0.5;
@@ -1018,16 +1174,27 @@ export class GameEngine {
       this.grenadeCd = 0.3;
       const aim = this.aimDir();
       const target = this.pointerWorld();
-      const travel = Math.min(1.2, Math.max(0.35, Math.hypot(target.x - p.pos.x, target.y - p.pos.y) / 520));
+      const travel = Math.min(
+        1.2,
+        Math.max(0.35, Math.hypot(target.x - p.pos.x, target.y - p.pos.y) / 520),
+      );
       this.grenades.push({
         pos: { x: p.pos.x + aim.x * (PLAYER_RADIUS + 4), y: p.pos.y + aim.y * (PLAYER_RADIUS + 4) },
         vel: { x: aim.x * 520, y: aim.y * 520 },
-        life: travel, fuse: travel + 0.4, radius: 140, damage: 60,
+        life: travel,
+        fuse: travel + 0.4,
+        radius: 200,
+        damage: 60,
       });
       audio.play("grenadeThrow");
     }
     // Reload (R)
-    if (this.consumeBuffer("reload") && der.bulletsEnabled && this.reloading === 0 && this.ammo < der.magazine) {
+    if (
+      this.consumeBuffer("reload") &&
+      der.bulletsEnabled &&
+      this.reloading === 0 &&
+      this.ammo < der.magazine
+    ) {
       this.reloading = 1.2;
       audio.play("reload");
     }
@@ -1061,6 +1228,28 @@ export class GameEngine {
   }
 
   private aimDir(): Vec {
+    if (this.autoAim) {
+      let bestDist = Infinity;
+      let bestE = null;
+      for (const e of this.enemies) {
+        if (e.hp <= 0) continue;
+        const dx = e.pos.x - this.player.pos.x;
+        const dy = e.pos.y - this.player.pos.y;
+        const dist = Math.hypot(dx, dy);
+        // Lock on if within reasonable screen range
+        if (dist < bestDist && dist < 600) {
+          bestDist = dist;
+          bestE = e;
+        }
+      }
+      if (bestE) {
+        const dx = bestE.pos.x - this.player.pos.x;
+        const dy = bestE.pos.y - this.player.pos.y;
+        const len = Math.hypot(dx, dy);
+        if (len >= 1) return { x: dx / len, y: dy / len };
+      }
+    }
+
     const world = this.pointerWorld();
     const dx = world.x - this.player.pos.x;
     const dy = world.y - this.player.pos.y;
@@ -1077,7 +1266,10 @@ export class GameEngine {
       e.shootCd = Math.max(0, e.shootCd - dt);
       e.dashCd = Math.max(0, e.dashCd - dt);
       e.dashTime = Math.max(0, e.dashTime - dt);
-      if (e.isBoss) { this.updateBoss(e, dt); continue; }
+      if (e.isBoss) {
+        this.updateBoss(e, dt);
+        continue;
+      }
 
       this.updateDetection(e, dt);
       const engaged = e.hasLOS || e.aggroTimer > 0;
@@ -1115,7 +1307,10 @@ export class GameEngine {
           e.vel.y = lerp(e.vel.y, tvy, dt * 3);
           if (d < 70) {
             // dagger melee
-            if (e.attackTimer === 0) { e.attackTimer = 0.4; audio.play("enemySlash"); }
+            if (e.attackTimer === 0) {
+              e.attackTimer = 0.4;
+              audio.play("enemySlash");
+            }
           } else if (d < 520 && e.shootCd === 0 && e.hasLOS) {
             this.enemyShoot(e, dirToPlayer, 320, 1);
             const presets = DIFFICULTY_PRESETS[this.difficulty];
@@ -1135,7 +1330,13 @@ export class GameEngine {
           if (d > 420 && e.shootCd === 0 && e.hasLOS) {
             audio.play("sniperCharge");
             // charged predictive shot
-            this.enemyShoot(e, normalize(predictAim(e.pos, this.player.pos, this.player.vel, 460)), 460, 2, true);
+            this.enemyShoot(
+              e,
+              normalize(predictAim(e.pos, this.player.pos, this.player.vel, 460)),
+              460,
+              2,
+              true,
+            );
             const presets = DIFFICULTY_PRESETS[this.difficulty];
             e.shootCd = 2.4 / presets.atkMul;
           }
@@ -1149,14 +1350,15 @@ export class GameEngine {
           if (e.attackState === "idle" && d < 70 && e.attackTimer === 0) {
             e.attackState = "windup";
             e.attackTimer = 0.4;
-            e.vel.x = 0; e.vel.y = 0;
+            e.vel.x = 0;
+            e.vel.y = 0;
             audio.play("enemySlash"); // windup queue
           } else if (e.attackState === "windup" && e.attackTimer === 0) {
             e.attackState = "swinging";
             e.attackTimer = 0.2;
             audio.play("dash");
             if (d < 90 && this.player.dashTime <= 0 && this.player.iFrames === 0) {
-               this.damagePlayer(Math.round(20 * DIFFICULTY_PRESETS[this.difficulty].dmgMul));
+              this.damagePlayer(Math.round(20 * DIFFICULTY_PRESETS[this.difficulty].dmgMul));
             }
           } else if (e.attackState === "swinging" && e.attackTimer === 0) {
             e.attackState = "cooldown";
@@ -1177,8 +1379,15 @@ export class GameEngine {
               audio.play("dash");
               for (let i = 0; i < 8; i++) {
                 this.particles.push({
-                  pos: { ...e.pos }, vel: { x: -dirToPlayer.x * 60 + (Math.random() - 0.5) * 30, y: -dirToPlayer.y * 60 + (Math.random() - 0.5) * 30 },
-                  life: 0.3, maxLife: 0.3, color: "#ff66aa", size: 3,
+                  pos: { ...e.pos },
+                  vel: {
+                    x: -dirToPlayer.x * 60 + (Math.random() - 0.5) * 30,
+                    y: -dirToPlayer.y * 60 + (Math.random() - 0.5) * 30,
+                  },
+                  life: 0.3,
+                  maxLife: 0.3,
+                  color: "#ff66aa",
+                  size: 3,
                 });
               }
             }
@@ -1233,7 +1442,10 @@ export class GameEngine {
     this.bullets.push({
       pos: { x: e.pos.x + Math.cos(a) * e.radius, y: e.pos.y + Math.sin(a) * e.radius },
       vel: { x: Math.cos(a) * speed, y: Math.sin(a) * speed },
-      life: 3.5, fromPlayer: false, damage, big,
+      life: 3.5,
+      fromPlayer: false,
+      damage,
+      big,
     });
   }
 
@@ -1251,7 +1463,7 @@ export class GameEngine {
     const dx = this.player.pos.x - e.pos.x;
     const dy = this.player.pos.y - e.pos.y;
     const dist = Math.hypot(dx, dy) || 1;
-    const desired = (e.bossPhase === 2) ? 220 : 300;
+    const desired = e.bossPhase === 2 ? 220 : 300;
     const radial = (dist - desired) * 1.4;
     const perpX = -dy / dist;
     const perpY = dx / dist;
@@ -1272,7 +1484,10 @@ export class GameEngine {
         this.bullets.push({
           pos: { x: e.pos.x, y: e.pos.y },
           vel: { x: Math.cos(ang) * 420, y: Math.sin(ang) * 420 },
-          life: 3.6, fromPlayer: false, damage: e.bossPhase === 2 ? 3 : 2, big: true,
+          life: 3.6,
+          fromPlayer: false,
+          damage: e.bossPhase === 2 ? 3 : 2,
+          big: true,
         });
       }
       e.telegraph = e.bossPhase === 2 ? 1.1 : 1.7;
@@ -1301,23 +1516,28 @@ export class GameEngine {
     // ability: spawn adds (phase 2 spawns more often)
     e.spawnCd = (e.spawnCd ?? 0) - dt;
     if ((e.spawnCd ?? 0) <= 0) {
-      const classes: EnemyClass[] = e.bossPhase === 2
-        ? ["slasher", "sniper", "shooter", "shield"]
-        : ["shooter", "slasher"];
+      const classes: EnemyClass[] =
+        e.bossPhase === 2 ? ["slasher", "sniper", "shooter", "shield"] : ["shooter", "slasher"];
       const count = e.bossPhase === 2 ? 3 : 2;
       for (let i = 0; i < count; i++) {
         const cls = classes[Math.floor(Math.random() * classes.length)];
         const a = Math.random() * Math.PI * 2;
         const r = 380;
-        const pos = this.nudgeOutOfWalls({
-          x: e.pos.x + Math.cos(a) * r,
-          y: e.pos.y + Math.sin(a) * r,
-        }, 24);
+        const pos = this.nudgeOutOfWalls(
+          {
+            x: e.pos.x + Math.cos(a) * r,
+            y: e.pos.y + Math.sin(a) * r,
+          },
+          24,
+        );
         this.enemies.push(this.makeEnemy(cls, pos, this.config!));
         this.totalHostiles++;
       }
       e.spawnCd = e.bossPhase === 2 ? 18 : 28;
-      this.onEvent({ type: "trace", msg: `Boss summons ${count} ${e.bossPhase === 2 ? "elite" : "drone"} reinforcements.` });
+      this.onEvent({
+        type: "trace",
+        msg: `Boss summons ${count} ${e.bossPhase === 2 ? "elite" : "drone"} reinforcements.`,
+      });
     }
   }
 
@@ -1337,7 +1557,12 @@ export class GameEngine {
       }
     }
     this.bullets = this.bullets.filter(
-      (b) => b.life > 0 && b.pos.x > -10 && b.pos.x < this.worldW + 10 && b.pos.y > -10 && b.pos.y < this.worldH + 10,
+      (b) =>
+        b.life > 0 &&
+        b.pos.x > -10 &&
+        b.pos.x < this.worldW + 10 &&
+        b.pos.y > -10 &&
+        b.pos.y < this.worldH + 10,
     );
   }
 
@@ -1351,7 +1576,8 @@ export class GameEngine {
           const dy = this.player.pos.y - h.y;
           if (Math.hypot(dx, dy) < h.r) {
             this.player.stunned = 0.7;
-            this.player.vel.x = 0; this.player.vel.y = 0;
+            this.player.vel.x = 0;
+            this.player.vel.y = 0;
             h.cooldown = h.charge + 1.5;
             this.spawnExplosion(this.player.pos.x, this.player.pos.y, "#ffcc00", 12);
             this.shake = Math.max(this.shake, 6);
@@ -1421,8 +1647,30 @@ export class GameEngine {
           this.currency += reward;
           audio.play("chestOpen");
           audio.play("coin");
-          this.spawnExplosion(pk.pos.x, pk.pos.y, pk.rarity === "epic" ? "#ffaa44" : pk.rarity === "rare" ? "#9d4dff" : "#00ffaa", 18);
-          this.spawnFloat(pk.pos.x, pk.pos.y - 24, `+${reward}¢ ${(pk.rarity ?? "").toUpperCase()}`, pk.rarity === "epic" ? "#ffaa44" : pk.rarity === "rare" ? "#c08bff" : "#00ffaa");
+          this.spawnExplosion(
+            pk.pos.x,
+            pk.pos.y,
+            pk.rarity === "legendary"
+              ? "#ff00cc"
+              : pk.rarity === "epic"
+                ? "#ffaa44"
+                : pk.rarity === "rare"
+                  ? "#9d4dff"
+                  : "#00ffaa",
+            18,
+          );
+          this.spawnFloat(
+            pk.pos.x,
+            pk.pos.y - 24,
+            `+${reward}¢ ${(pk.rarity ?? "").toUpperCase()}`,
+            pk.rarity === "legendary"
+              ? "#ff00cc"
+              : pk.rarity === "epic"
+                ? "#ffaa44"
+                : pk.rarity === "rare"
+                  ? "#c08bff"
+                  : "#00ffaa",
+          );
           this.onEvent({ type: "currency", amount: reward, total: this.currency });
           continue;
         }
@@ -1458,11 +1706,16 @@ export class GameEngine {
         // wall collision halts travel and starts fuse
         for (const w of this.walls) {
           if (gr.pos.x > w.x && gr.pos.x < w.x + w.w && gr.pos.y > w.y && gr.pos.y < w.y + w.h) {
-            gr.vel.x = 0; gr.vel.y = 0; gr.life = 0;
+            gr.vel.x = 0;
+            gr.vel.y = 0;
+            gr.life = 0;
             break;
           }
         }
-        if (gr.life <= 0) { gr.vel.x = 0; gr.vel.y = 0; }
+        if (gr.life <= 0) {
+          gr.vel.x = 0;
+          gr.vel.y = 0;
+        }
       }
       gr.fuse -= dt;
     }
@@ -1512,8 +1765,13 @@ export class GameEngine {
 
   private spawnFloat(x: number, y: number, text: string, color: string) {
     this.floats.push({
-      pos: { x, y }, vel: { x: 0, y: -10 },
-      life: 1.4, maxLife: 1.4, text, color, size: 14,
+      pos: { x, y },
+      vel: { x: 0, y: -10 },
+      life: 1.4,
+      maxLife: 1.4,
+      text,
+      color,
+      size: 14,
     });
   }
 
@@ -1550,9 +1808,12 @@ export class GameEngine {
             continue;
           }
           // shield aura also protects nearby snipers while active
-          const protectedBy = this.enemies.find((s) =>
-            s.cls === "shield" && s.shieldActive &&
-            Math.hypot(s.pos.x - e.pos.x, s.pos.y - e.pos.y) < 80 && s.id !== e.id,
+          const protectedBy = this.enemies.find(
+            (s) =>
+              s.cls === "shield" &&
+              s.shieldActive &&
+              Math.hypot(s.pos.x - e.pos.x, s.pos.y - e.pos.y) < 80 &&
+              s.id !== e.id,
           );
           if (protectedBy) {
             b.life = 0;
@@ -1591,19 +1852,26 @@ export class GameEngine {
       const dist = Math.hypot(dx, dy);
       if (dist < e.radius + PLAYER_RADIUS) {
         if (p.dashTime > 0 && !(e.isBoss && e.bossPhase === 2)) {
-          const dmg = e.isBoss ? 4 : 3;
+          const dmg = (e.isBoss ? 4 : 3) + derive(this.upgrades).swordBonus;
           e.hp -= dmg;
           e.hitFlash = 0.15;
           this.m.damageDealt += dmg;
           this.spawnExplosion(e.pos.x, e.pos.y, "#00f0ff", 14);
-          if (e.hp <= 0) { this.m.killsByDash++; this.killEnemy(e); }
+          if (e.hp <= 0) {
+            this.m.killsByDash++;
+            this.killEnemy(e);
+          }
         } else if (p.iFrames === 0) {
           if (e.cls === "slasher" || e.cls === "node") continue; // Slasher uses swing attack, nodes don't damage
           const base = e.isBoss
-            ? (e.bossPhase === 2 ? 26 : 18)
-            : e.cls === "shooter" ? 10
-            : e.cls === "shield" ? 16
-            : 10;
+            ? e.bossPhase === 2
+              ? 26
+              : 18
+            : e.cls === "shooter"
+              ? 10
+              : e.cls === "shield"
+                ? 16
+                : 10;
           this.damagePlayer(Math.round(base * presets.dmgMul));
         }
       }
@@ -1611,14 +1879,22 @@ export class GameEngine {
     // hazards
     for (const h of this.hazards) {
       if (h.kind === "laser" && this.laserActive(h)) {
-        if (p.pos.x > h.x - PLAYER_RADIUS && p.pos.x < h.x + h.w + PLAYER_RADIUS &&
-            p.pos.y > h.y && p.pos.y < h.y + h.h) {
+        if (
+          p.pos.x > h.x - PLAYER_RADIUS &&
+          p.pos.x < h.x + h.w + PLAYER_RADIUS &&
+          p.pos.y > h.y &&
+          p.pos.y < h.y + h.h
+        ) {
           if (p.iFrames === 0) this.damagePlayer(Math.round(20 * presets.dmgMul));
         }
       }
       if (h.kind === "phase" && this.phaseSolid(h)) {
-        if (p.pos.x > h.x - PLAYER_RADIUS && p.pos.x < h.x + h.w + PLAYER_RADIUS &&
-            p.pos.y > h.y - PLAYER_RADIUS && p.pos.y < h.y + h.h + PLAYER_RADIUS) {
+        if (
+          p.pos.x > h.x - PLAYER_RADIUS &&
+          p.pos.x < h.x + h.w + PLAYER_RADIUS &&
+          p.pos.y > h.y - PLAYER_RADIUS &&
+          p.pos.y < h.y + h.h + PLAYER_RADIUS
+        ) {
           const overlaps = [
             { axis: "left", d: p.pos.x - (h.x - PLAYER_RADIUS) },
             { axis: "right", d: h.x + h.w + PLAYER_RADIUS - p.pos.x },
@@ -1638,7 +1914,8 @@ export class GameEngine {
   private damagePlayer(amt: number) {
     this.player.hp = Math.max(0, this.player.hp - amt);
     this.player.iFrames = 0.4;
-    this.player.scaleX = 1.5; this.player.scaleY = 0.6;
+    this.player.scaleX = 1.5;
+    this.player.scaleY = 0.6;
     this.shake = Math.max(this.shake, 8);
     this.m.damageTaken += amt;
     this.spawnExplosion(this.player.pos.x, this.player.pos.y, "#ff3b6b", 10);
@@ -1654,7 +1931,7 @@ export class GameEngine {
       this.spawnExplosion(e.pos.x, e.pos.y, e.cls === "node" ? "#00ffff" : "#ff3b6b", 25);
     }
     if (e.cls !== "node") this.killedHostiles++;
-    this.m.damageDealt += e.hp; 
+    this.m.damageDealt += e.hp;
     this.enemies = this.enemies.filter((x) => x.id !== e.id);
     this.shake = Math.max(this.shake, e.isBoss ? 18 : 4);
   }
@@ -1667,7 +1944,9 @@ export class GameEngine {
         pos: { x, y },
         vel: { x: Math.cos(a) * s, y: Math.sin(a) * s },
         life: 0.4 + Math.random() * 0.3,
-        maxLife: 0.7, color, size: 2 + Math.random() * 3,
+        maxLife: 0.7,
+        color,
+        size: 2 + Math.random() * 3,
       });
     }
   }
@@ -1705,12 +1984,21 @@ function lerp(a: number, b: number, t: number) {
   const tt = Math.min(1, Math.max(0, t));
   return a + (b - a) * tt;
 }
-function dist2(a: Vec, b: Vec) { const dx = a.x - b.x, dy = a.y - b.y; return dx * dx + dy * dy; }
-function normalize(v: Vec): Vec { const l = Math.hypot(v.x, v.y) || 1; return { x: v.x / l, y: v.y / l }; }
+function dist2(a: Vec, b: Vec) {
+  const dx = a.x - b.x,
+    dy = a.y - b.y;
+  return dx * dx + dy * dy;
+}
+function normalize(v: Vec): Vec {
+  const l = Math.hypot(v.x, v.y) || 1;
+  return { x: v.x / l, y: v.y / l };
+}
 function pointInRect(p: Vec, r: { x: number; y: number; w: number; h: number }) {
   return p.x > r.x && p.x < r.x + r.w && p.y > r.y && p.y < r.y + r.h;
 }
-function clamp(v: number, lo: number, hi: number) { return Math.max(lo, Math.min(hi, v)); }
+function clamp(v: number, lo: number, hi: number) {
+  return Math.max(lo, Math.min(hi, v));
+}
 
 function rollGroupWeighted(
   size: number,
@@ -1720,7 +2008,7 @@ function rollGroupWeighted(
   const total = w.slasher + w.shooter + w.shield + w.sniper || 1;
   const ns = Math.round((w.slasher / total) * size);
   const nS = Math.round((w.shooter / total) * size);
-  const nh = Math.round((w.shield  / total) * size);
+  const nh = Math.round((w.shield / total) * size);
   const nn = Math.max(0, size - ns - nS - nh);
   const out: EnemyClass[] = [];
   for (let i = 0; i < ns; i++) out.push("slasher");
@@ -1744,16 +2032,32 @@ function predictAim(from: Vec, target: Vec, targetVel: Vec, bulletSpeed: number)
 }
 
 // AABB-line intersection: segment (ax,ay)+(dx,dy)*t for t in [0,1] vs rect (rx,ry,rw,rh).
-function segmentIntersectsRect(ax: number, ay: number, dx: number, dy: number, rx: number, ry: number, rw: number, rh: number): boolean {
-  let tmin = 0, tmax = 1;
+function segmentIntersectsRect(
+  ax: number,
+  ay: number,
+  dx: number,
+  dy: number,
+  rx: number,
+  ry: number,
+  rw: number,
+  rh: number,
+): boolean {
+  let tmin = 0,
+    tmax = 1;
   const p = [-dx, dx, -dy, dy];
   const q = [ax - rx, rx + rw - ax, ay - ry, ry + rh - ay];
   for (let i = 0; i < 4; i++) {
-    if (p[i] === 0) { if (q[i] < 0) return false; }
-    else {
+    if (p[i] === 0) {
+      if (q[i] < 0) return false;
+    } else {
       const t = q[i] / p[i];
-      if (p[i] < 0) { if (t > tmax) return false; if (t > tmin) tmin = t; }
-      else { if (t < tmin) return false; if (t < tmax) tmax = t; }
+      if (p[i] < 0) {
+        if (t > tmax) return false;
+        if (t > tmin) tmin = t;
+      } else {
+        if (t < tmin) return false;
+        if (t < tmax) tmax = t;
+      }
     }
   }
   return true;
