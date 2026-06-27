@@ -1,17 +1,17 @@
 <div align="center">
 
-<img src="https://capsule-render.vercel.app/api?type=waving&color=0:0D1117,50:6366F1,100:8B5CF6&height=180&section=header&text=The%20Warden's%20Labyrinth&fontSize=34&fontColor=A78BFA&animation=fadeIn&fontAlignY=40&desc=AI%20Adaptive%20Cyberpunk%20Game%20%E2%80%94%20Google%20AISeekho%202026&descAlignY=62&descSize=14&descColor=C4B5FD" width="100%"/>
+<img src="https://capsule-render.vercel.app/api?type=waving&color=0:000000,50:1a1a1a,100:2563EB&height=180&section=header&text=The%20Warden's%20Labyrinth&fontSize=34&fontColor=FFFFFF&animation=fadeIn&fontAlignY=40&desc=AI%20Adaptive%20Cyberpunk%20Game%20%E2%80%94%20Google%20AISeekho%202026&descAlignY=62&descSize=14&descColor=2563EB" width="100%"/>
 
-[![Google Antigravity](https://img.shields.io/badge/Google_Antigravity-6366F1?style=for-the-badge&logo=google&logoColor=white)](#)
-[![Multi-Agent AI](https://img.shields.io/badge/Multi--Agent_AI-8B5CF6?style=for-the-badge&logo=target&logoColor=white)](#)
-[![React](https://img.shields.io/badge/React_19-A78BFA?style=for-the-badge&logo=react&logoColor=white)](https://react.dev)
-[![Cloudflare](https://img.shields.io/badge/Cloudflare_Workers-0D1117?style=for-the-badge&logo=cloudflare&logoColor=white)](https://workers.cloudflare.com)
+[![Google Antigravity](https://img.shields.io/badge/Google_Antigravity-000000?style=for-the-badge&logo=google&logoColor=white)](#)
+[![Multi-Agent AI](https://img.shields.io/badge/Multi--Agent_AI-000000?style=for-the-badge&logo=target&logoColor=white)](#)
+[![React](https://img.shields.io/badge/React_19-000000?style=for-the-badge&logo=react&logoColor=white)](https://react.dev)
+[![Cloudflare](https://img.shields.io/badge/Cloudflare_Workers-000000?style=for-the-badge&logo=cloudflare&logoColor=white)](https://workers.cloudflare.com)
 
 </div>
 
 <br/>
 
-## `$ hackathon --submission`
+### `H A C K A T H O N   S U B M I S S I O N`
 
 | | |
 |---|---|
@@ -22,13 +22,15 @@
 
 <br/>
 
-## `$ what --is-this`
+### `W H A T   I S   T H I S`
 
-**The Warden's Labyrinth** is a cyberpunk adaptive game built around **three simultaneous AI agents** working together in real time — not scripted enemy AI, but a coordinated multi-agent system that adapts dynamically to player behavior.
+| |
+|:---|
+| **The Warden's Labyrinth** is a cyberpunk adaptive game built around **three simultaneous AI agents** working together in real time — not scripted enemy AI, but a coordinated multi-agent system that adapts dynamically to player behavior. |
 
 <br/>
 
-## `$ cat agents.md`
+### `A G E N T S`
 
 <div align="center">
 
@@ -44,17 +46,7 @@ All three agents run **simultaneously**, orchestrated through a real-time multi-
 
 <br/>
 
-## `$ tech --stack`
-
-<div align="center">
-
-![React](https://skillicons.dev/icons?i=react&theme=dark)
-![TypeScript](https://skillicons.dev/icons?i=typescript&theme=dark)
-![Vite](https://skillicons.dev/icons?i=vite&theme=dark)
-![TailwindCSS](https://skillicons.dev/icons?i=tailwind&theme=dark)
-![Cloudflare](https://skillicons.dev/icons?i=cloudflare&theme=dark)
-
-</div>
+### `T E C H   S T A C K`
 
 <div align="center">
 
@@ -76,13 +68,13 @@ All three agents run **simultaneously**, orchestrated through a real-time multi-
 
 <br/>
 
-## `$ tree --architecture`
+### `A R C H I T E C T U R E`
 
 ```
-┌────────────────────────────────────────────┐
+┌──────────────────────────────────────────┐
 │         Player (Mobile / Browser)        │
 │      React 19 + TanStack Start UI        │
-└─────────────────────┬─────────────────────┘
+└────────────────────┬─────────────────────┘
                       │
 ┌────────────────────▼─────────────────────┐
 │         Cloudflare Workers (Edge)         │
@@ -99,7 +91,7 @@ All three agents run **simultaneously**, orchestrated through a real-time multi-
 
 <br/>
 
-## `$ ls features/`
+### `F E A T U R E S`
 
 - **Dynamic difficulty** — Strategy Agent reads player performance and adjusts in real time
 - **Adaptive narrative** — Narrative Agent generates context-aware taunts per session
@@ -110,7 +102,7 @@ All three agents run **simultaneously**, orchestrated through a real-time multi-
 
 <br/>
 
-## `$ setup --run`
+### `S E T U P   &   R U N`
 
 #### Prerequisites
 - [Bun](https://bun.sh) (package manager used in this project)
@@ -152,7 +144,7 @@ wrangler deploy
 
 <br/>
 
-## `$ cat security-notes.md`
+### `S E C U R I T Y   N O T E S`
 
 - No real PII or production credentials committed — see `.gitignore` / `.cyber_archive`
 - Strict TypeScript + ESLint enforcement to catch type and logic errors early
@@ -164,6 +156,6 @@ wrangler deploy
 
 *Built for the Google AISeekho 2026 Hackathon in 5 days by a 3-person team*
 
-<img src="https://capsule-render.vercel.app/api?type=waving&color=0:8B5CF6,50:6366F1,100:0D1117&height=100&section=footer" width="100%"/>
+<img src="https://capsule-render.vercel.app/api?type=waving&color=0:2563EB,50:1a1a1a,100:000000&height=100&section=footer" width="100%"/>
 
 </div>
